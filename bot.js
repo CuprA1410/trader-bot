@@ -166,23 +166,16 @@ function calcRSI(closes, period = 14) {
   return 100 - 100 / (1 + rs);
 }
 
-// VWAP — session-based, resets at midnight UTC
-function calcVWAP(candles) {
-  const midnightUTC = new Date();
-  midnightUTC.setUTCHours(0, 0, 0, 0);
-  const sessionCandles = candles.filter((c) => c.time >= midnightUTC.getTime());
-  if (sessionCandles.length === 0) return null;
-  const cumTPV = sessionCandles.reduce(
-    (sum, c) => sum + ((c.high + c.low + c.close) / 3) * c.volume,
-    0,
-  );
-  const cumVol = sessionCandles.reduce((sum, c) => sum + c.volume, 0);
-  return cumVol === 0 ? null : cumTPV / cumVol;
-}
 
-// ─── Safety Check ───────────────────────────────────────────────────────────
+// ─── Safety Check — Van de Poppe Strategy ───────────────────────────────────
+// ALL four conditions must pass for a long entry:
+//   1. Price above EMA21 AND EMA50 (bullish bias confirmed)
+//   2. Price above EMA200 (macro bull market — only take longs above 200)
+//   3. Price within 0.6% of EMA21 or EMA50 (pullback to entry confluence zone)
+//   4. RSI(14) between 40 and 65 (momentum present, not overbought at entry)
+// Spot-only bot: bearish/short conditions are checked but result in no trade.
 
-function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
+function runSafetyCheck(price, ema21, ema50, ema200, rsi14) {
   const results = [];
 
   const check = (label, required, actual, pass) => {
@@ -192,83 +185,64 @@ function runSafetyCheck(price, ema8, vwap, rsi3, rules) {
     console.log(`     Required: ${required} | Actual: ${actual}`);
   };
 
-  console.log("\n── Safety Check ─────────────────────────────────────────\n");
+  console.log("\n── Van de Poppe Safety Check ────────────────────────────\n");
 
-  // Determine bias first
-  const bullishBias = price > vwap && price > ema8;
-  const bearishBias = price < vwap && price < ema8;
+  // Determine bias
+  const bullishBias = price > ema21 && price > ema50 && rsi14 > 50;
+  const bearishBias = price < ema21 && price < ema50 && rsi14 < 50;
 
   if (bullishBias) {
     console.log("  Bias: BULLISH — checking long entry conditions\n");
 
-    // 1. Price above VWAP
+    // 1. Price above EMA21 and EMA50
     check(
-      "Price above VWAP (buyers in control)",
-      `> ${vwap.toFixed(2)}`,
+      "Price above EMA(21) and EMA(50) — bullish bias",
+      `> EMA21 ${ema21.toFixed(2)} AND > EMA50 ${ema50.toFixed(2)}`,
       price.toFixed(2),
-      price > vwap,
+      price > ema21 && price > ema50,
     );
 
-    // 2. Price above EMA(8)
+    // 2. Price above EMA200 — macro bull market
     check(
-      "Price above EMA(8) (uptrend confirmed)",
-      `> ${ema8.toFixed(2)}`,
+      "Price above EMA(200) — macro bull market",
+      `> ${ema200.toFixed(2)}`,
       price.toFixed(2),
-      price > ema8,
+      price > ema200,
     );
 
-    // 3. RSI(3) pullback
+    // 3. Pullback to entry zone — within 0.6% of EMA21 or EMA50
+    const distFromEma21 = Math.abs((price - ema21) / ema21) * 100;
+    const distFromEma50 = Math.abs((price - ema50) / ema50) * 100;
+    const nearEma = Math.min(distFromEma21, distFromEma50);
     check(
-      "RSI(3) below 30 (snap-back setup in uptrend)",
-      "< 30",
-      rsi3.toFixed(2),
-      rsi3 < 30,
+      "Price within 0.6% of EMA(21) or EMA(50) — entry confluence zone",
+      "< 0.6%",
+      `${nearEma.toFixed(2)}% (EMA21: ${distFromEma21.toFixed(2)}%, EMA50: ${distFromEma50.toFixed(2)}%)`,
+      nearEma < 0.6,
     );
 
-    // 4. Not overextended from VWAP
-    const distFromVWAP = Math.abs((price - vwap) / vwap) * 100;
+    // 4. RSI(14) between 40 and 65
     check(
-      "Price within 1.5% of VWAP (not overextended)",
-      "< 1.5%",
-      `${distFromVWAP.toFixed(2)}%`,
-      distFromVWAP < 1.5,
+      "RSI(14) between 40–65 — momentum present, not overbought",
+      "40 < RSI < 65",
+      rsi14.toFixed(2),
+      rsi14 >= 40 && rsi14 <= 65,
     );
   } else if (bearishBias) {
-    console.log("  Bias: BEARISH — checking short entry conditions\n");
-
-    check(
-      "Price below VWAP (sellers in control)",
-      `< ${vwap.toFixed(2)}`,
-      price.toFixed(2),
-      price < vwap,
+    console.log(
+      "  Bias: BEARISH — spot bot does not short. No trade.\n",
     );
-
-    check(
-      "Price below EMA(8) (downtrend confirmed)",
-      `< ${ema8.toFixed(2)}`,
-      price.toFixed(2),
-      price < ema8,
-    );
-
-    check(
-      "RSI(3) above 70 (reversal setup in downtrend)",
-      "> 70",
-      rsi3.toFixed(2),
-      rsi3 > 70,
-    );
-
-    const distFromVWAP = Math.abs((price - vwap) / vwap) * 100;
-    check(
-      "Price within 1.5% of VWAP (not overextended)",
-      "< 1.5%",
-      `${distFromVWAP.toFixed(2)}%`,
-      distFromVWAP < 1.5,
-    );
-  } else {
-    console.log("  Bias: NEUTRAL — no clear direction. No trade.\n");
     results.push({
       label: "Market bias",
-      required: "Bullish or bearish",
+      required: "Bullish (spot bot — longs only)",
+      actual: "Bearish",
+      pass: false,
+    });
+  } else {
+    console.log("  Bias: NEUTRAL — price between EMA21/EMA50. No trade.\n");
+    results.push({
+      label: "Market bias",
+      required: "Bullish (price above EMA21 AND EMA50, RSI > 50)",
       actual: "Neutral",
       pass: false,
     });
@@ -517,29 +491,31 @@ async function run() {
     return;
   }
 
-  // Fetch candle data — need enough for EMA(8) + full session for VWAP
+  // Fetch candle data — need 500 bars for accurate EMA(200) warm-up
   console.log("\n── Fetching market data from Binance ───────────────────\n");
   const candles = await fetchCandles(CONFIG.symbol, CONFIG.timeframe, 500);
   const closes = candles.map((c) => c.close);
   const price = closes[closes.length - 1];
   console.log(`  Current price: $${price.toFixed(2)}`);
 
-  // Calculate indicators
-  const ema8 = calcEMA(closes, 8);
-  const vwap = calcVWAP(candles);
-  const rsi3 = calcRSI(closes, 3);
+  // Calculate van de Poppe indicators
+  const ema21 = calcEMA(closes, 21);
+  const ema50 = calcEMA(closes, 50);
+  const ema200 = calcEMA(closes, 200);
+  const rsi14 = calcRSI(closes, 14);
 
-  console.log(`  EMA(8):  $${ema8.toFixed(2)}`);
-  console.log(`  VWAP:    $${vwap ? vwap.toFixed(2) : "N/A"}`);
-  console.log(`  RSI(3):  ${rsi3 ? rsi3.toFixed(2) : "N/A"}`);
+  console.log(`  EMA(21):  $${ema21.toFixed(2)}`);
+  console.log(`  EMA(50):  $${ema50.toFixed(2)}`);
+  console.log(`  EMA(200): $${ema200.toFixed(2)}`);
+  console.log(`  RSI(14):  ${rsi14 ? rsi14.toFixed(2) : "N/A"}`);
 
-  if (!vwap || !rsi3) {
-    console.log("\n⚠️  Not enough data to calculate indicators. Exiting.");
+  if (!rsi14) {
+    console.log("\n⚠️  Not enough data to calculate RSI. Exiting.");
     return;
   }
 
   // Run safety check
-  const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, rules);
+  const { results, allPass } = runSafetyCheck(price, ema21, ema50, ema200, rsi14);
 
   // Calculate position size
   const tradeSize = Math.min(
@@ -555,7 +531,7 @@ async function run() {
     symbol: CONFIG.symbol,
     timeframe: CONFIG.timeframe,
     price,
-    indicators: { ema8, vwap, rsi3 },
+    indicators: { ema21, ema50, ema200, rsi14 },
     conditions: results,
     allPass,
     tradeSize,
