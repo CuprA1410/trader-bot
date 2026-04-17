@@ -21,9 +21,10 @@ class JournalRepository:
     def write(self, trade: Trade) -> str:
         """Create a journal entry markdown file. Returns the file path."""
         outcome = self._outcome_label(trade)
+        market = trade.trade_mode.upper()   # SPOT | FUTURES | MARGIN
         filename = (
             f"{trade.closed_at.strftime('%Y-%m-%d_%H%M')}"
-            f"_{trade.symbol}_{trade.side}_{outcome}.md"
+            f"_{trade.symbol}_{market}_{trade.side}_{outcome}.md"
         )
         path = os.path.join(self._journal_dir, filename)
         content = self._render(trade, outcome)
@@ -59,11 +60,13 @@ class JournalRepository:
         entry_iso = trade.opened_at.strftime("%Y-%m-%dT%H:%M:%SZ")
         close_iso = trade.closed_at.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        return f"""# Trade Journal — {trade.symbol} {trade.side} | {outcome}
+        market = trade.trade_mode.upper()
+        return f"""# Trade Journal — {trade.symbol} {market} {trade.side} | {outcome}
 
 **Opened:** {trade.opened_at.strftime("%Y-%m-%d %H:%M UTC")}
 **Closed:** {trade.closed_at.strftime("%Y-%m-%d %H:%M UTC")}
 **Strategy:** {trade.strategy_name}
+**Market:** {market}
 **Mode:** {"📋 PAPER" if trade.paper_trading else "🔴 LIVE"}
 
 ---

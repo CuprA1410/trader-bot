@@ -32,6 +32,7 @@ class Trade:
     closed_at: datetime
     order_id: str = ""
     strategy_name: str = ""
+    trade_mode: str = "spot"          # "spot" | "futures" | "margin"
     entry_conditions: list[str] = field(default_factory=list)
     failed_conditions: list[str] = field(default_factory=list)
     notes: str = ""
@@ -78,6 +79,7 @@ class Trade:
             "Duration (h)": self.duration_hours,
             "Order ID": self.order_id,
             "Mode": "PAPER" if self.paper_trading else "LIVE",
+            "Market": self.trade_mode.upper(),
             "Strategy": self.strategy_name,
             "Notes": self.notes,
         }

@@ -22,7 +22,7 @@ CSV_COLUMNS = [
     "Date", "Time (UTC)", "Exchange", "Symbol", "Side", "Quantity",
     "Entry Price", "Exit Price", "Total USD", "PnL USD", "PnL %",
     "Fee (est.)", "Close Reason", "Duration (h)", "Order ID", "Mode",
-    "Strategy", "Notes",
+    "Market", "Strategy", "Notes",
 ]
 
 

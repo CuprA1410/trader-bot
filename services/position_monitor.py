@@ -196,5 +196,6 @@ class PositionMonitor:
             closed_at=datetime.utcnow(),
             order_id=position.order_id,
             strategy_name=position.strategy_name,
+            trade_mode=getattr(position, "trade_mode", "spot"),
             entry_conditions=position.entry_conditions,
         )
