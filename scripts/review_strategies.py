@@ -14,6 +14,8 @@ Output:
 Run this whenever you want feedback — after 10 trades, after a bad streak,
 or whenever you want to revisit the strategy parameters.
 """
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
 import sys
@@ -26,7 +28,7 @@ from utils.logger import log
 def main():
     config   = load_config()
     log_dir  = config.trading.log_dir
-    strat_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strategies")
+    strat_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "strategies")
 
     reviewer = StrategyReviewer(log_dir=log_dir, strategy_dir=strat_dir)
     path     = reviewer.run()

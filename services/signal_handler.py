@@ -47,7 +47,7 @@ class SignalHandler:
         import json as _json
 
         args = self._build_order_args(signal)
-        cmd  = [self._python_cmd, "place_order.py"] + args
+        cmd  = [self._python_cmd, "scripts/place_order.py"] + args
 
         log.info(f"  Placing order: {signal.direction.value} {signal.symbol} @ ${signal.entry_price:,.4f}")
         try:
