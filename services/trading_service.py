@@ -110,6 +110,13 @@ class TradingService:
 
             log.info(f"\n  {signal.summary()}\n")
 
+            # SHORT signals are only valid on futures/swap — skip silently on spot/margin
+            if (signal.direction == Direction.SHORT
+                    and cfg.trade_mode.lower() not in ("futures", "swap")):
+                log.info(f"  SHORT signal skipped — TRADE_MODE={cfg.trade_mode} does not support shorting.")
+                self._record_blocked(signal, trade_size, trade_repo, strategy)
+                continue
+
             if not signal.is_actionable:
                 # No signal — log to CSV directly, zero Claude tokens
                 self._record_blocked(signal, trade_size, trade_repo, strategy)
@@ -135,7 +142,7 @@ class TradingService:
         trade = Trade(
             id=str(uuid.uuid4()),
             symbol=signal.symbol,
-            side="LONG",
+            side=signal.direction.value if signal.direction.value != "NONE" else "LONG",
             entry_price=signal.entry_price,
             exit_price=signal.entry_price,
             stop_loss=signal.stop_loss,

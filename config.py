@@ -21,13 +21,14 @@ class BitGetConfig:
 
 @dataclass(frozen=True)
 class TradingConfig:
-    strategies: list[str]       # one or more: ["supertrend_rsi", "bb_rsi_scalp"]
+    strategies: list[str]       # one or more: ["ema_scalp", "supertrend_qqe"]
     symbols: list[str]          # all pairs to monitor e.g. ["BTCUSDT", "ETHUSDT"]
     portfolio_value_usd: float
     max_trade_size_usd: float
     max_trades_per_day: int     # per symbol
     paper_trading: bool
-    trade_mode: str
+    trade_mode: str             # "spot" | "futures" | "margin"
+    futures_leverage: int       # leverage for futures orders (ignored on spot/margin)
     log_dir: str
 
 
@@ -70,6 +71,7 @@ def load_config() -> AppConfig:
             max_trades_per_day=int(os.getenv("MAX_TRADES_PER_DAY", "50")),
             paper_trading=os.getenv("PAPER_TRADING", "true").lower() != "false",
             trade_mode=os.getenv("TRADE_MODE", "spot"),
+            futures_leverage=int(os.getenv("FUTURES_LEVERAGE", "5")),
             log_dir=log_dir,
         ),
     )

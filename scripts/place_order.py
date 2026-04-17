@@ -60,6 +60,16 @@ def main():
 
     trade_mode = cfg.trade_mode.lower()
 
+    # Spot/margin cannot short — reject early rather than failing at the exchange
+    if args.side.upper() == "SHORT" and trade_mode not in ("futures", "swap"):
+        result = {
+            "ok": False,
+            "reason": "SHORT_NOT_SUPPORTED",
+            "message": f"SHORT signals require TRADE_MODE=futures (current: {trade_mode}). Skipping.",
+        }
+        print(json.dumps(result))
+        return
+
     position_repo = PositionRepository(cfg.log_dir)
     trade_repo    = TradeRepository(cfg.log_dir, args.symbol)
 
@@ -134,9 +144,29 @@ def main():
             ccxt_sym  = normalise_symbol(args.symbol, trade_mode)
             ccxt_side = "buy" if args.side.upper() == "LONG" else "sell"
 
+            # Enforce exchange minimum lot size — adjust quantity (and trade_size) if needed
+            min_qty = float(
+                exchange.markets.get(ccxt_sym, {})
+                .get("limits", {}).get("amount", {}).get("min") or 0
+            )
+            if min_qty and quantity < min_qty:
+                quantity   = min_qty
+                trade_size = round(quantity * args.entry, 4)
+                log.info(
+                    f"  Qty below exchange minimum ({min_qty}) "
+                    f"— adjusted to {quantity} (${trade_size:.2f})"
+                )
+
             is_futures = trade_mode in ("futures", "swap")
 
             if is_futures:
+                # Set leverage before placing the order
+                try:
+                    exchange.set_leverage(cfg.futures_leverage, ccxt_sym)
+                    log.info(f"  Leverage set to {cfg.futures_leverage}x on {ccxt_sym}")
+                except Exception as e:
+                    log.warning(f"  Could not set leverage: {e} — proceeding with account default")
+
                 # Futures/swap: market order with preset TP/SL.
                 # BitGet v2 one-way (unilateral) mode requires tradeSide="open".
                 # presetTakeProfitPrice / presetStopLossPrice attach native TP/SL to

@@ -71,9 +71,24 @@ class SignalHandler:
                 log.warning(f"  place_order.py exited with code {result.returncode}")
                 return False
 
-            # Parse the JSON result printed by place_order.py
+            # Parse the JSON result printed by place_order.py.
+            # stdout may contain log lines mixed with a multi-line JSON block —
+            # find the last top-level { ... } by scanning for balanced braces.
             try:
-                data = _json.loads(result.stdout)
+                text = result.stdout
+                last_start = text.rfind("\n{")
+                last_start = last_start + 1 if last_start != -1 else text.find("{")
+                depth, end = 0, -1
+                for idx, ch in enumerate(text[last_start:], start=last_start):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = idx + 1
+                            break
+                json_str = text[last_start:end] if end != -1 else text
+                data = _json.loads(json_str)
                 if not data.get("ok", False):
                     reason = data.get("reason", data.get("error", "unknown"))
                     log.warning(f"  Order rejected: {reason} — {data.get('message', '')}")
