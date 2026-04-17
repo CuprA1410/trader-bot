@@ -10,32 +10,51 @@ import ccxt
 from config import BitGetConfig
 from utils.logger import log
 
+# Map trade_mode → ccxt defaultType for BitGet
+_BITGET_TYPE_MAP = {
+    "spot":    "spot",
+    "margin":  "margin",
+    "futures": "swap",
+    "swap":    "swap",
+}
+
 
 class ExchangeFactory:
 
     @staticmethod
-    def create_bitget(config: BitGetConfig, paper_trading: bool = True) -> ccxt.bitget:
+    def create_bitget(
+        config: BitGetConfig,
+        paper_trading: bool = True,
+        trade_mode: str = "spot",
+    ) -> ccxt.bitget:
         """
-        Return a ccxt BitGet instance.
-        - paper_trading=True  → orders are blocked in place_order.py (no API calls)
-        - config.demo=True    → connects to BitGet demo environment (real API calls, fake money)
-        - demo=False          → connects to BitGet live environment (real money)
+        Return a ccxt BitGet instance configured for the requested trade mode.
+
+        trade_mode values:
+          "spot"    → defaultType "spot"   (basic BTC/USDT market)
+          "margin"  → defaultType "margin" (spot margin)
+          "futures" → defaultType "swap"   (linear perpetual, BTC/USDT:USDT)
+
+        paper_trading=True  → orders are blocked in place_order.py (no API calls)
+        config.demo=True    → connects to BitGet demo environment (real API calls, fake money)
         """
+        ccxt_type = _BITGET_TYPE_MAP.get(trade_mode.lower(), "spot")
+
         exchange = ccxt.bitget({
-            "apiKey":     config.api_key,
-            "secret":     config.secret_key,
-            "password":   config.passphrase,
+            "apiKey":   config.api_key,
+            "secret":   config.secret_key,
+            "password": config.passphrase,
             "options": {
-                "defaultType": "spot",
+                "defaultType": ccxt_type,
             },
         })
 
         if config.demo:
             exchange.set_sandbox_mode(True)
-            log.info("  Exchange: BitGet | Mode: DEMO (sandbox)")
+            log.info(f"  Exchange: BitGet | Mode: DEMO (sandbox) | Market: {trade_mode} (ccxt type: {ccxt_type})")
         else:
             mode = "PAPER (local simulation)" if paper_trading else "LIVE"
-            log.info(f"  Exchange: BitGet | Mode: {mode}")
+            log.info(f"  Exchange: BitGet | Mode: {mode} | Market: {trade_mode} (ccxt type: {ccxt_type})")
 
         return exchange
 

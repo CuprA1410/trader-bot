@@ -21,6 +21,7 @@ from repositories.journal_repository import JournalRepository
 from services.market_data_service import MarketDataService
 from services.trade_analyst import TradeAnalyst
 from utils.logger import log
+from utils.market import normalise_symbol
 
 
 class PositionMonitor:
@@ -75,16 +76,17 @@ class PositionMonitor:
             return None
 
         log.info(
-            f"  {position.symbol} {position.side} | Entry ${position.entry_price:,.2f} "
+            f"  {position.symbol} {position.side} [{position.trade_mode}] "
+            f"| Entry ${position.entry_price:,.2f} "
             f"| Current ${current_price:,.2f} | SL ${position.stop_loss:,.2f} | TP ${position.take_profit:,.2f}"
         )
 
         close_reason = self._detect_close_reason(position, current_price)
         if close_reason is None:
-            log.info(f"    → Still open. No action.")
+            log.info(f"    Still open. No action.")
             return None
 
-        log.info(f"    → {close_reason.value} hit at ${current_price:,.2f}")
+        log.info(f"    {close_reason.value} hit at ${current_price:,.2f}")
 
         exit_price = self._execute_close(position, current_price)
         trade = self._build_trade(position, exit_price, close_reason)
@@ -98,10 +100,10 @@ class PositionMonitor:
         trade_repo.save(trade)
         journal_path = self._journal.write(trade)
 
-        outcome = "WIN 🟢" if trade.is_winner else "LOSS 🔴"
+        outcome = "WIN" if trade.is_winner else "LOSS"
         log.info(
             f"    {outcome} | P&L ${trade.pnl_usd:+.4f} ({trade.pnl_pct:+.2f}%) "
-            f"| Journal → {journal_path}"
+            f"| Journal -> {journal_path}"
         )
 
         # Ask Claude to analyze the closed trade and enrich the journal
@@ -126,30 +128,51 @@ class PositionMonitor:
 
     def _execute_close(self, position: Position, current_price: float) -> float:
         """
-        Close the position. In live mode with bracket orders already on the exchange,
-        the SL/TP order already filled — so we just return the price for record-keeping.
-        In paper mode, simulate the close.
+        Close the position on the exchange.
+
+        Paper mode: simulate the fill price.
+        Live with bracket orders (futures native TP/SL): exchange already handled it.
+        Live without bracket orders (spot/margin or fallback): place a market close order.
         """
         if self._paper_trading:
-            log.info(f"    📋 PAPER — simulated close at ${current_price:,.2f}")
+            log.info(f"    PAPER — simulated close at ${current_price:,.2f}")
             return current_price
 
-        # Live mode: if bracket orders were placed, the exchange already closed the position
-        # when SL or TP triggered. No need to place another market order.
+        # Live futures: if bracket orders were placed, the exchange already closed when
+        # TP/SL triggered. Just return the price for record-keeping.
         if position.sl_order_id or position.tp_order_id:
-            log.info(f"    🔴 LIVE — bracket order triggered at ~${current_price:,.2f} (exchange handled close)")
+            log.info(f"    LIVE — bracket order triggered at ~${current_price:,.2f} (exchange handled close)")
             return current_price
 
-        # Live mode without bracket orders (legacy/fallback): close manually
+        # Live mode without bracket orders: place a market close order manually.
+        # Futures need reduceOnly=True; spot/margin use a plain market sell/buy.
         try:
-            close_side = "sell" if position.side == "LONG" else "buy"
-            order = self._exchange.create_market_order(
-                symbol=self._normalise_symbol(position.symbol),
-                side=close_side,
-                amount=position.quantity,
-            )
+            trade_mode  = getattr(position, "trade_mode", "spot")
+            is_futures  = trade_mode in ("futures", "swap")
+            close_side  = "sell" if position.side == "LONG" else "buy"
+            ccxt_sym    = normalise_symbol(position.symbol, trade_mode)
+
+            if is_futures:
+                # BitGet v2 one-way mode: need tradeSide="close" + reduceOnly to close
+                order = self._exchange.create_order(
+                    symbol=ccxt_sym,
+                    type="market",
+                    side=close_side,
+                    amount=position.quantity,
+                    price=None,
+                    params={"reduceOnly": True, "tradeSide": "close"},
+                )
+            else:
+                order = self._exchange.create_order(
+                    symbol=ccxt_sym,
+                    type="market",
+                    side=close_side,
+                    amount=position.quantity,
+                    price=None,
+                )
+
             fill_price = float(order.get("average") or order.get("price") or current_price)
-            log.info(f"    🔴 LIVE close order placed | Fill: ${fill_price:,.2f}")
+            log.info(f"    LIVE close order placed | {trade_mode} | Fill: ${fill_price:,.2f}")
             return fill_price
         except Exception as e:
             log.error(f"    Close order failed: {e} — using market price for record")
@@ -175,10 +198,3 @@ class PositionMonitor:
             strategy_name=position.strategy_name,
             entry_conditions=position.entry_conditions,
         )
-
-    @staticmethod
-    def _normalise_symbol(symbol: str) -> str:
-        for quote in ("USDT", "USDC", "BTC", "ETH", "BNB"):
-            if symbol.endswith(quote) and "/" not in symbol:
-                return f"{symbol[:-len(quote)]}/{quote}"
-        return symbol

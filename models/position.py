@@ -31,6 +31,7 @@ class Position:
     tp_order_id: str = ""       # BitGet take-profit order ID (live only)
     strategy_name: str = ""
     entry_conditions: list[str] = field(default_factory=list)
+    trade_mode: str = "spot"    # "spot", "futures", or "margin"
 
     def risk_reward_ratio(self) -> float:
         """How much we can gain vs how much we risk."""
@@ -56,6 +57,7 @@ class Position:
             "tp_order_id": self.tp_order_id,
             "strategy_name": self.strategy_name,
             "entry_conditions": self.entry_conditions,
+            "trade_mode": self.trade_mode,
         }
 
     @classmethod
@@ -77,4 +79,5 @@ class Position:
             tp_order_id=data.get("tp_order_id", ""),
             strategy_name=data.get("strategy_name", ""),
             entry_conditions=data.get("entry_conditions", []),
+            trade_mode=data.get("trade_mode", "spot"),
         )

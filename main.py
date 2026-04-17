@@ -65,7 +65,7 @@ def build_service() -> TradingService:
     log.info(f"Starting bot for symbols: {', '.join(cfg.symbols)}")
 
     binance = ExchangeFactory.create_binance_readonly()
-    bitget  = ExchangeFactory.create_bitget(config.bitget, cfg.paper_trading)
+    bitget  = ExchangeFactory.create_bitget(config.bitget, cfg.paper_trading, cfg.trade_mode)
 
     # One TradeRepository per symbol → one CSV per symbol
     trade_repos = {

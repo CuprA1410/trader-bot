@@ -16,7 +16,10 @@ def setup_logger(name: str = "trading-bot") -> logging.Logger:
 
     logger.setLevel(logging.INFO)
 
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(
+        open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
+        if hasattr(sys.stdout, "fileno") else sys.stdout
+    )
     handler.setLevel(logging.INFO)
 
     formatter = logging.Formatter(

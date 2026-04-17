@@ -32,6 +32,7 @@ from repositories.position_repository import PositionRepository
 from repositories.trade_repository import TradeRepository
 from services.market_data_service import MarketDataService
 from utils.logger import log
+from utils.market import normalise_symbol
 
 
 def parse_args():
@@ -56,6 +57,8 @@ def main():
     if args.side.upper() not in ("LONG", "SHORT"):
         print(json.dumps({"ok": False, "error": "side must be LONG or SHORT"}))
         sys.exit(1)
+
+    trade_mode = cfg.trade_mode.lower()
 
     position_repo = PositionRepository(cfg.log_dir)
     trade_repo    = TradeRepository(cfg.log_dir, args.symbol)
@@ -112,55 +115,57 @@ def main():
     quantity   = round(trade_size / args.entry, 6)
 
     # ── Place order ───────────────────────────────────────────────────────────
-    order_id = ""
-
+    order_id    = ""
     sl_order_id = ""
     tp_order_id = ""
 
     if cfg.paper_trading:
-        order_id = f"PAPER-{int(datetime.now().timestamp())}"
-        log.info(f"📋 PAPER TRADE | {args.side} {args.symbol} ${trade_size:.2f} @ ${args.entry:,.2f}")
-        log.info(f"   SL: ${args.sl:,.2f} | TP: ${args.tp:,.2f} (monitored by bot, not exchange)")
+        order_id = f"PAPER-{int(datetime.utcnow().timestamp())}"
+        log.info(f"PAPER TRADE | {args.side} {args.symbol} ${trade_size:.2f} @ ${args.entry:,.2f}")
+        log.info(f"   SL: ${args.sl:,.2f} | TP: ${args.tp:,.2f} | Mode: {trade_mode}")
     else:
         try:
-            exchange  = ExchangeFactory.create_bitget(config.bitget, paper_trading=False)
-            ccxt_sym  = _normalise(args.symbol)
+            exchange  = ExchangeFactory.create_bitget(
+                config.bitget,
+                paper_trading=False,
+                trade_mode=trade_mode,
+            )
+            ccxt_sym  = normalise_symbol(args.symbol, trade_mode)
             ccxt_side = "buy" if args.side.upper() == "LONG" else "sell"
 
-            # Spot markets don't support native TP/SL on BitGet — place a plain
-            # market order. The position_monitor checks SL/TP every cycle and
-            # closes the position by placing a sell order when price is hit.
-            # Futures/swap markets support native TP/SL (TRADE_MODE=futures).
-            is_futures = cfg.trade_mode.lower() in ("futures", "swap")
+            is_futures = trade_mode in ("futures", "swap")
 
             if is_futures:
+                # Futures/swap: plain market order.
+                # BitGet v2 one-way (unilateral) mode requires tradeSide="open" to open
+                # a position and "close" to reduce/close one.
+                # SL/TP is monitored in software by PositionMonitor, which sends a
+                # reduceOnly+tradeSide=close market order when price breaches the level.
                 order = exchange.create_order(
                     symbol=ccxt_sym,
                     type="market",
                     side=ccxt_side,
                     amount=quantity,
                     price=None,
-                    params={
-                        "takeProfit": {"triggerPrice": args.tp},
-                        "stopLoss":   {"triggerPrice": args.sl},
-                    },
+                    params={"tradeSide": "open"},
                 )
-                tp_order_id = str(order.get("takeProfitOrderId", ""))
-                sl_order_id = str(order.get("stopLossOrderId", ""))
             else:
-                # Spot — plain market order, bot monitors SL/TP
+                # Spot / margin — plain market order; bot monitors SL/TP in software.
+                # BitGet spot market BUY requires a price to calculate cost (amount * price).
+                # Passing the signal entry price satisfies this; fill is still at market.
+                price_param = args.entry if ccxt_side == "buy" else None
                 order = exchange.create_order(
                     symbol=ccxt_sym,
                     type="market",
                     side=ccxt_side,
                     amount=quantity,
-                    price=None,
+                    price=price_param,
                 )
 
             order_id = order.get("id", "")
             fill     = float(order.get("average") or order.get("price") or args.entry)
-            log.info(f"ORDER placed | entry #{order_id} | fill ${fill:,.4f}")
-            log.info(f"   SL: ${args.sl:,.4f} | TP: ${args.tp:,.4f} (monitored by bot)")
+            log.info(f"ORDER placed | {trade_mode} | entry #{order_id} | fill ${fill:,.4f}")
+            log.info(f"   SL: ${args.sl:,.4f} | TP: ${args.tp:,.4f}")
 
         except Exception as e:
             print(json.dumps({"ok": False, "error": str(e)}))
@@ -177,18 +182,20 @@ def main():
         size_usd=trade_size,
         quantity=quantity,
         paper_trading=cfg.paper_trading,
-        opened_at=datetime.now(),
+        opened_at=datetime.utcnow(),
         order_id=order_id,
         sl_order_id=sl_order_id,
         tp_order_id=tp_order_id,
         strategy_name=args.strategy or "Unknown",
         entry_conditions=args.conditions,
+        trade_mode=trade_mode,
     )
     position_repo.save(position)
 
     result = {
         "ok": True,
         "mode": "PAPER" if cfg.paper_trading else "LIVE",
+        "trade_mode": trade_mode,
         "position_id": position.id,
         "symbol": args.symbol,
         "side": args.side.upper(),
@@ -203,13 +210,6 @@ def main():
         "rr_ratio": position.risk_reward_ratio(),
     }
     print(json.dumps(result, indent=2))
-
-
-def _normalise(symbol: str) -> str:
-    for quote in ("USDT", "USDC", "BTC", "ETH", "BNB"):
-        if symbol.endswith(quote) and "/" not in symbol:
-            return f"{symbol[:-len(quote)]}/{quote}"
-    return symbol
 
 
 if __name__ == "__main__":
