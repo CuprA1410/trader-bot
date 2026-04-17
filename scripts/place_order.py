@@ -130,25 +130,36 @@ def main():
                 paper_trading=False,
                 trade_mode=trade_mode,
             )
+            exchange.load_markets()
             ccxt_sym  = normalise_symbol(args.symbol, trade_mode)
             ccxt_side = "buy" if args.side.upper() == "LONG" else "sell"
 
             is_futures = trade_mode in ("futures", "swap")
 
             if is_futures:
-                # Futures/swap: plain market order.
-                # BitGet v2 one-way (unilateral) mode requires tradeSide="open" to open
-                # a position and "close" to reduce/close one.
-                # SL/TP is monitored in software by PositionMonitor, which sends a
-                # reduceOnly+tradeSide=close market order when price breaches the level.
+                # Futures/swap: market order with preset TP/SL.
+                # BitGet v2 one-way (unilateral) mode requires tradeSide="open".
+                # presetTakeProfitPrice / presetStopLossPrice attach native TP/SL to
+                # the order so the exchange closes the position even if the bot goes
+                # offline. PositionMonitor also tracks them in software as a backup.
+                # Round TP/SL to the market's tick size (e.g. 0.1 for BTC/USDT:USDT)
+                tp_str = exchange.price_to_precision(ccxt_sym, args.tp)
+                sl_str = exchange.price_to_precision(ccxt_sym, args.sl)
                 order = exchange.create_order(
                     symbol=ccxt_sym,
                     type="market",
                     side=ccxt_side,
                     amount=quantity,
                     price=None,
-                    params={"tradeSide": "open"},
+                    params={
+                        "tradeSide":             "open",
+                        "presetTakeProfitPrice": tp_str,
+                        "presetStopLossPrice":   sl_str,
+                    },
                 )
+                # BitGet echoes preset prices in info; use them as IDs for tracking
+                tp_order_id = str(order.get("info", {}).get("presetTakeProfitPrice", "") or "")
+                sl_order_id = str(order.get("info", {}).get("presetStopLossPrice",   "") or "")
             else:
                 # Spot / margin — plain market order; bot monitors SL/TP in software.
                 # BitGet spot market BUY requires a price to calculate cost (amount * price).
