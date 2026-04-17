@@ -120,9 +120,47 @@ def main():
     except Exception as e:
         log.warning(f"  Price staleness check failed ({e}) — proceeding anyway")
 
-    # ── Calculate trade size ──────────────────────────────────────────────────
-    trade_size = args.size if args.size else min(cfg.portfolio_value_usd * 0.02, cfg.max_trade_size_usd)
-    quantity   = round(trade_size / args.entry, 6)
+    # ── Calculate trade size ─────────────────────────────────────────────────
+    # Risk-based sizing: risk exactly RISK_PCT of portfolio on each trade.
+    # quantity = risk_amount / sl_distance  →  if SL is hit, loss = risk_amount exactly.
+    # Leverage only affects how much margin is posted, not the PnL per unit of price move.
+    # MAX_TRADE_SIZE_USD caps the *margin* per trade as a safety guardrail.
+    if args.size:
+        # Caller explicitly provided a size (e.g. test scripts) — use it directly.
+        trade_size = args.size
+        quantity   = round(trade_size / args.entry, 6)
+    else:
+        is_futures_mode = cfg.trade_mode.lower() in ("futures", "swap")
+        risk_amount  = cfg.portfolio_value_usd * cfg.risk_pct          # e.g. $10
+        sl_distance  = abs(args.entry - args.sl)                        # $ per unit
+
+        if sl_distance == 0:
+            print(json.dumps({"ok": False, "error": "SL price equals entry price — cannot size position"}))
+            sys.exit(1)
+
+        # On futures, each unit moves leverage × 1 USD/unit of price change,
+        # so SL distance in PnL terms is already sl_distance (no leverage divisor
+        # needed when sizing by notional quantity, because the loss = qty × sl_distance
+        # regardless of leverage — leverage only affects margin required).
+        quantity   = round(risk_amount / sl_distance, 6)
+        trade_size = round(quantity * args.entry, 4)    # notional value
+        margin     = trade_size / (cfg.futures_leverage if is_futures_mode else 1)
+
+        log.info(
+            f"  Risk sizing: {cfg.risk_pct*100:.1f}% of ${cfg.portfolio_value_usd:.0f} = "
+            f"${risk_amount:.2f} risk | SL dist ${sl_distance:.4f} | "
+            f"qty {quantity} | notional ${trade_size:.2f} | margin ${margin:.2f}"
+        )
+
+        # Safety cap: if margin exceeds MAX_TRADE_SIZE_USD, scale down
+        if margin > cfg.max_trade_size_usd:
+            max_notional = cfg.max_trade_size_usd * (cfg.futures_leverage if is_futures_mode else 1)
+            quantity     = round(max_notional / args.entry, 6)
+            trade_size   = round(quantity * args.entry, 4)
+            log.warning(
+                f"  Margin cap hit — scaled down to ${cfg.max_trade_size_usd:.2f} margin "
+                f"(${trade_size:.2f} notional, qty {quantity})"
+            )
 
     # ── Place order ───────────────────────────────────────────────────────────
     order_id    = ""
@@ -130,7 +168,7 @@ def main():
     tp_order_id = ""
 
     if cfg.paper_trading:
-        order_id = f"PAPER-{int(datetime.utcnow().timestamp())}"
+        order_id = f"PAPER-{int(datetime.now().timestamp())}"
         log.info(f"PAPER TRADE | {args.side} {args.symbol} ${trade_size:.2f} @ ${args.entry:,.2f}")
         log.info(f"   SL: ${args.sl:,.2f} | TP: ${args.tp:,.2f} | Mode: {trade_mode}")
     else:
@@ -239,7 +277,7 @@ def main():
         size_usd=trade_size,
         quantity=quantity,
         paper_trading=cfg.paper_trading,
-        opened_at=datetime.utcnow(),
+        opened_at=datetime.now(),
         order_id=order_id,
         sl_order_id=sl_order_id,
         tp_order_id=tp_order_id,

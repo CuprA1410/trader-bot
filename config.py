@@ -24,7 +24,8 @@ class TradingConfig:
     strategies: list[str]       # one or more: ["ema_scalp", "supertrend_qqe"]
     symbols: list[str]          # all pairs to monitor e.g. ["BTCUSDT", "ETHUSDT"]
     portfolio_value_usd: float
-    max_trade_size_usd: float
+    risk_pct: float             # fraction of portfolio to risk per trade (e.g. 0.01 = 1%)
+    max_trade_size_usd: float   # safety cap on margin per trade (prevents runaway sizing)
     max_trades_per_day: int     # per symbol
     paper_trading: bool
     trade_mode: str             # "spot" | "futures" | "margin"
@@ -67,7 +68,8 @@ def load_config() -> AppConfig:
             strategies=strategies,
             symbols=symbols,
             portfolio_value_usd=float(os.getenv("PORTFOLIO_VALUE_USD", "1000")),
-            max_trade_size_usd=float(os.getenv("MAX_TRADE_SIZE_USD", "20")),
+            risk_pct=float(os.getenv("RISK_PCT", "0.01")),
+            max_trade_size_usd=float(os.getenv("MAX_TRADE_SIZE_USD", "200")),
             max_trades_per_day=int(os.getenv("MAX_TRADES_PER_DAY", "50")),
             paper_trading=os.getenv("PAPER_TRADING", "true").lower() != "false",
             trade_mode=os.getenv("TRADE_MODE", "spot"),

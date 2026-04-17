@@ -26,7 +26,6 @@ import ccxt
 
 from config import AppConfig
 from models.signal import Signal, Direction
-from models.position import Position
 from models.trade import Trade, CloseReason
 from strategies.base_strategy import BaseStrategy
 from repositories.position_repository import PositionRepository
@@ -93,7 +92,8 @@ class TradingService:
             return
         log.info(f"  Trades today ({symbol}): {trades_today}/{cfg.max_trades_per_day}")
 
-        trade_size = min(cfg.portfolio_value_usd * 0.02, cfg.max_trade_size_usd)
+        # Estimate trade size for BLOCKED journal records (actual sizing done in place_order.py)
+        _risk_amount = cfg.portfolio_value_usd * cfg.risk_pct   # e.g. $10
 
         for strategy in self._strategies:
             # Each strategy checks only its own open positions — different strategies
@@ -110,16 +110,23 @@ class TradingService:
 
             log.info(f"\n  {signal.summary()}\n")
 
+            # Estimate notional for blocked record: risk_amount / sl_distance * entry
+            _sl_dist = abs(signal.entry_price - signal.stop_loss) if signal.stop_loss else 0
+            _est_notional = (
+                round((_risk_amount / _sl_dist) * signal.entry_price, 2)
+                if _sl_dist > 0 and signal.entry_price > 0 else _risk_amount
+            )
+
             # SHORT signals are only valid on futures/swap — skip silently on spot/margin
             if (signal.direction == Direction.SHORT
                     and cfg.trade_mode.lower() not in ("futures", "swap")):
                 log.info(f"  SHORT signal skipped — TRADE_MODE={cfg.trade_mode} does not support shorting.")
-                self._record_blocked(signal, trade_size, trade_repo, strategy)
+                self._record_blocked(signal, _est_notional, trade_repo, strategy)
                 continue
 
             if not signal.is_actionable:
                 # No signal — log to CSV directly, zero Claude tokens
-                self._record_blocked(signal, trade_size, trade_repo, strategy)
+                self._record_blocked(signal, _est_notional, trade_repo, strategy)
                 log.info(f"  No signal for {symbol} [{strategy.name}]. Claude not invoked.")
                 continue
 
@@ -151,8 +158,8 @@ class TradingService:
             quantity=round(trade_size / entry, 6),
             close_reason=CloseReason.BLOCKED,
             paper_trading=self._config.trading.paper_trading,
-            opened_at=datetime.utcnow(),
-            closed_at=datetime.utcnow(),
+            opened_at=datetime.now(),
+            closed_at=datetime.now(),
             strategy_name=strategy.name,
             entry_conditions=signal.passed_conditions,
             failed_conditions=signal.failed_conditions,
@@ -168,7 +175,7 @@ class TradingService:
         )
         log.info("═" * 57)
         log.info("  Claude Trading Bot v2")
-        log.info(f"  {datetime.utcnow().isoformat()}")
+        log.info(f"  {datetime.now().isoformat()}")
         log.info(f"  Mode: {mode}")
         log.info(f"  Strategies ({len(self._strategies)}): {strat_summary}")
         log.info(f"  Symbols: {symbols}")

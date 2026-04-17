@@ -64,4 +64,7 @@ class ExchangeFactory:
         Return a public (no-auth) Binance instance for market data only.
         No API key required — uses the free public endpoints.
         """
-        return ccxt.binance({"options": {"defaultType": "spot"}})
+        return ccxt.binance({
+            "enableRateLimit": True,   # auto-throttle if approaching limits
+            "options": {"defaultType": "spot"},
+        })
