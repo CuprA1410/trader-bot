@@ -25,9 +25,8 @@ import time
 
 from config import load_config
 from factories.exchange_factory import ExchangeFactory
-from strategies.van_de_poppe_strategy import VanDePoppeStrategy
-from strategies.supertrend_rsi_strategy import SupertrendRsiStrategy
-from strategies.bb_rsi_scalp_strategy import BbRsiScalpStrategy
+from strategies.ema_scalp_strategy import EmaScalpStrategy
+from strategies.supertrend_qqe_strategy import SupertrendQqeStrategy
 from repositories.position_repository import PositionRepository
 from repositories.trade_repository import TradeRepository
 from repositories.journal_repository import JournalRepository
@@ -42,9 +41,8 @@ from utils.logger import log
 def _build_strategies(cfg):
     """Build all active strategies from STRATEGIES env var (comma-separated)."""
     registry = {
-        "van_de_poppe":   lambda: VanDePoppeStrategy(),
-        "supertrend_rsi": lambda: SupertrendRsiStrategy(cfg),
-        "bb_rsi_scalp":   lambda: BbRsiScalpStrategy(cfg),
+        "ema_scalp":       lambda: EmaScalpStrategy(),
+        "supertrend_qqe":  lambda: SupertrendQqeStrategy(),
     }
     active = []
     for name in cfg.strategies:
