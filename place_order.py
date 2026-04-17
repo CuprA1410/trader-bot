@@ -26,7 +26,6 @@ from datetime import datetime
 from config import load_config
 from factories.exchange_factory import ExchangeFactory
 from models.position import Position
-from models.trade import Trade, CloseReason
 from repositories.position_repository import PositionRepository
 from repositories.trade_repository import TradeRepository
 from services.market_data_service import MarketDataService
@@ -117,7 +116,7 @@ def main():
     tp_order_id = ""
 
     if cfg.paper_trading:
-        order_id = f"PAPER-{int(datetime.utcnow().timestamp())}"
+        order_id = f"PAPER-{int(datetime.now().timestamp())}"
         log.info(f"📋 PAPER TRADE | {args.side} {args.symbol} ${trade_size:.2f} @ ${args.entry:,.2f}")
         log.info(f"   SL: ${args.sl:,.2f} | TP: ${args.tp:,.2f} (monitored by bot, not exchange)")
     else:
@@ -126,26 +125,40 @@ def main():
             ccxt_sym  = _normalise(args.symbol)
             ccxt_side = "buy" if args.side.upper() == "LONG" else "sell"
 
-            # Single call — entry market order with TP and SL attached.
-            # BitGet supports createOrderWithTakeProfitAndStopLoss natively via ccxt.
-            # The exchange manages TP and SL together — when one fills, the other cancels.
-            order = exchange.create_order(
-                symbol=ccxt_sym,
-                type="market",
-                side=ccxt_side,
-                amount=quantity,
-                price=None,
-                params={
-                    "takeProfit": {"triggerPrice": args.tp},
-                    "stopLoss":   {"triggerPrice": args.sl},
-                },
-            )
-            order_id    = order.get("id", "")
-            fill        = float(order.get("average") or order.get("price") or args.entry)
-            tp_order_id = str(order.get("takeProfitOrderId", ""))
-            sl_order_id = str(order.get("stopLossOrderId", ""))
-            log.info(f"DEMO ORDER placed | entry #{order_id} | fill ${fill:,.4f}")
-            log.info(f"   TP #{tp_order_id} @ ${args.tp:,.4f} | SL #{sl_order_id} @ ${args.sl:,.4f}")
+            # Spot markets don't support native TP/SL on BitGet — place a plain
+            # market order. The position_monitor checks SL/TP every cycle and
+            # closes the position by placing a sell order when price is hit.
+            # Futures/swap markets support native TP/SL (TRADE_MODE=futures).
+            is_futures = cfg.trade_mode.lower() in ("futures", "swap")
+
+            if is_futures:
+                order = exchange.create_order(
+                    symbol=ccxt_sym,
+                    type="market",
+                    side=ccxt_side,
+                    amount=quantity,
+                    price=None,
+                    params={
+                        "takeProfit": {"triggerPrice": args.tp},
+                        "stopLoss":   {"triggerPrice": args.sl},
+                    },
+                )
+                tp_order_id = str(order.get("takeProfitOrderId", ""))
+                sl_order_id = str(order.get("stopLossOrderId", ""))
+            else:
+                # Spot — plain market order, bot monitors SL/TP
+                order = exchange.create_order(
+                    symbol=ccxt_sym,
+                    type="market",
+                    side=ccxt_side,
+                    amount=quantity,
+                    price=None,
+                )
+
+            order_id = order.get("id", "")
+            fill     = float(order.get("average") or order.get("price") or args.entry)
+            log.info(f"ORDER placed | entry #{order_id} | fill ${fill:,.4f}")
+            log.info(f"   SL: ${args.sl:,.4f} | TP: ${args.tp:,.4f} (monitored by bot)")
 
         except Exception as e:
             print(json.dumps({"ok": False, "error": str(e)}))
@@ -162,7 +175,7 @@ def main():
         size_usd=trade_size,
         quantity=quantity,
         paper_trading=cfg.paper_trading,
-        opened_at=datetime.utcnow(),
+        opened_at=datetime.now(),
         order_id=order_id,
         sl_order_id=sl_order_id,
         tp_order_id=tp_order_id,

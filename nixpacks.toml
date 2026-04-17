@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["python312"]
-
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
+nixPkgs = ["python312", "python312Packages.pip"]
 
 [start]
 cmd = "python main.py"
+
+# To run bot + dashboard together in one service, change the line above to:
+# cmd = "bash start.sh"
