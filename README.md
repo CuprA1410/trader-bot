@@ -1,277 +1,308 @@
-# Claude + TradingView MCP — Automated Trading
+# Claude Trading Bot v2 — Python Architecture
 
-> **New to this?** Watch the previous video first — it sets up the TradingView MCP connection this builds on.
-
-[![How To Connect Claude to TradingView (Insanely Cool)](https://img.youtube.com/vi/vIX6ztULs4U/maxresdefault.jpg)](https://youtu.be/vIX6ztULs4U)
-
-[![Claude Code + TradingView Now Actually Executes Real Trades](https://img.youtube.com/vi/aDWJ6lLemJU/maxresdefault.jpg)](https://www.youtube.com/watch?v=aDWJ6lLemJU)
+Automated trading bot that monitors 4 crypto pairs across multiple strategies simultaneously.
+Python calculates all indicators — Claude is only invoked to take a screenshot and analyze closed trades.
 
 ---
 
-## What This Does
+## How It Works
 
-**Five things you get from this setup:**
+Every 5 minutes the bot:
 
-1. **Claude connected to your exchange** — reads your TradingView chart and executes trades on BitGet automatically
-2. **A safety check** — every condition in your strategy must pass before a single trade goes through
-3. **24/7 cloud execution** — deploy to Railway and it runs on a schedule, even when your laptop is closed
-4. **Automatic tax accounting** — every trade logged to `trades.csv` with date, price, fees, and net amount, ready for your accountant
-5. **Free** — no email, no course, no upsell. Everything is in this repo.
+1. **Checks open positions** — if SL or TP was hit, closes the position, writes to CSV, and asks Claude to analyze the trade and enrich the journal
+2. **Fetches candles from Binance** (free public API, no auth needed)
+3. **Runs all active strategies** across all 4 symbols
+4. **No signal** → logs BLOCKED to that symbol's CSV. Claude is never called.
+5. **Signal detected** → `place_order.py` runs immediately (no Claude delay), then Claude takes a screenshot for the journal
+
+Visual confirmation was removed — Python already validated all conditions against real Binance data. TradingView is just a visual of the same numbers.
 
 ---
 
-## The One-Shot Prompt
+## Strategies
 
-> **This is the thing you paste.** Open Claude Code in this directory, paste the entire contents of [`prompts/02-one-shot-trade.md`](prompts/02-one-shot-trade.md), and Claude will do the rest.
+Multiple strategies run simultaneously. Configure in `.env`:
 
-Here's what it does when you run it:
+```
+STRATEGIES=supertrend_rsi,bb_rsi_scalp
+```
 
-| Step | What Claude does |
-|------|-----------------|
-| 1 | Reads your `rules.json` strategy |
-| 2 | Pulls live price + indicator data from TradingView |
-| 3 | Calculates MACD from raw candle data |
-| 4 | Evaluates market bias (bullish / bearish / neutral) |
-| 4b | Checks trade limits — daily cap and max trade size |
-| 5 | Runs the safety check — every entry condition checked |
-| 6 | Executes the trade via BitGet if all conditions pass |
-| 7 | Logs the trade to `trades.csv` — date, price, fees, net amount (tax-ready) |
-| 8 | Saves full decision log to `safety-check-log.json` |
+Each strategy runs independently per symbol. Only one position per symbol is allowed at a time — the first strategy that fires wins. Each strategy owns its own timeframe, SL, and TP — no need to set these in `.env`.
 
-If anything fails the safety check, it stops and tells you exactly which condition failed and the actual values. No trade goes through unless everything lines up.
+---
+
+### BB + RSI + Stochastic Scalp *(5m, high-frequency)*
+
+| Parameter | Value |
+|-----------|-------|
+| Timeframe | 5m |
+| Bollinger Bands | 20-period, 3 std devs |
+| RSI | Period 14, oversold < 34 (must be turning up) |
+| Stochastic RSI | Period 14, oversold < 20 |
+| ADX filter | > 20 (skip ranging/choppy markets) |
+| Volume filter | Above 20-period average |
+| Stop loss | 0.25% below entry |
+| Take profit | 0.60% above entry (~2.4:1 R:R after fees) |
+
+Mean-reversion: buy when price touches the lower Bollinger Band with RSI + Stochastic confirming oversold. Target the middle band. Generates 10–20 signals/day per coin.
+
+Fee math: 0.20% round-trip, 0.22% break-even, 0.60% target → ~0.40% net per trade.
+
+---
+
+### Supertrend + RSI *(1H, intraday)*
+
+| Parameter | Value |
+|-----------|-------|
+| Timeframe | 1H |
+| Supertrend | ATR 10, Multiplier 3.0 |
+| RSI | Period 14, range 50–70 |
+| Volume filter | > 1.5× 20-period average |
+| EMA bias | Price above EMA(200) |
+| Stop loss | 1.5× ATR below entry |
+| Take profit | 3.0× ATR above entry (2:1 R:R) |
+
+Generates 2–5 signals per day per coin.
+
+---
+
+### Van de Poppe — Golden Pocket *(4H, swing trading)*
+
+| Parameter | Value |
+|-----------|-------|
+| Timeframe | 4H |
+| Condition 1 | Price above EMA(21) AND EMA(50) |
+| Condition 2 | Price above EMA(200) — macro bull only |
+| Condition 3 | Price within 0.6% of EMA21/50 — pullback zone |
+| Condition 4 | RSI(14) between 40–65 |
+| Stop loss | 2% below entry |
+| Take profit | 4% above entry (2:1 R:R) |
+
+Generates 1–2 signals per week.
+
+---
+
+## Project Structure
+
+```
+main.py                          ← entry point + loop runner
+config.py                        ← all env vars in typed frozen dataclasses
+requirements.txt                 ← ccxt, pandas, numpy, ta, python-dotenv, flask
+place_order.py                   ← places a trade directly (price staleness check included)
+check_positions.py               ← CLI — checks SL/TP on all open positions
+test_signal.py                   ← sends a fake signal through the full pipeline for testing
+│
+├── models/
+│   ├── signal.py                ← strategy output (direction, SL, TP, timeframe, strategy_name)
+│   ├── position.py              ← open trade (includes sl_order_id, tp_order_id for OCO)
+│   └── trade.py                 ← closed trade with full P&L
+│
+├── strategies/                  ← Strategy Pattern — each owns its timeframe, SL, TP
+│   ├── base_strategy.py         ← abstract interface (name, timeframe, analyze)
+│   ├── bb_rsi_scalp_strategy.py    ← BB + RSI + Stochastic, 5m
+│   ├── supertrend_rsi_strategy.py  ← Supertrend + RSI, 1H
+│   └── van_de_poppe_strategy.py    ← Van de Poppe, 4H
+│
+├── factories/
+│   └── exchange_factory.py      ← creates ccxt BitGet + Binance instances
+│
+├── repositories/
+│   ├── trade_repository.py      ← data/trades_BTCUSDT.csv etc. (per-symbol)
+│   ├── position_repository.py   ← data/positions.json (survives restarts)
+│   └── journal_repository.py    ← data/journal/DATE_SYMBOL_WIN|LOSS.md
+│
+├── services/
+│   ├── market_data_service.py   ← fetches OHLCV from Binance via ccxt
+│   ├── position_monitor.py      ← checks SL/TP each run, closes + journals
+│   ├── signal_handler.py        ← places order directly + asks Claude for screenshot
+│   ├── trade_analyst.py         ← Claude analyzes closed trades, enriches journal
+│   └── trading_service.py       ← orchestrates full cycle across all symbols + strategies
+│
+├── utils/
+│   ├── logger.py                ← shared logger (UTC timestamps)
+│   └── time_utils.py            ← UTC helpers
+│
+├── dashboard/                   ← trade journal web dashboard
+│   ├── app.py                   ← Flask app — run with: python dashboard/app.py
+│   └── templates/index.html     ← dashboard UI
+│
+└── data/
+    ├── trades_BTCUSDT.csv       ← closed trades + blocked signals per symbol
+    ├── trades_ETHUSDT.csv
+    ├── trades_SOLUSDT.csv
+    ├── trades_XRPUSDT.csv
+    ├── positions.json           ← open positions (sl_order_id + tp_order_id stored)
+    ├── journal/                 ← one .md per closed trade, enriched by Claude
+    └── screenshots/             ← chart screenshots taken at signal time
+```
 
 ---
 
 ## Getting Started
 
-### Step 1 — Paste the one-shot prompt into Claude Code
+### 1. Install dependencies
 
-Copy the entire contents of [`prompts/02-one-shot-trade.md`](prompts/02-one-shot-trade.md) and paste it into your Claude Code terminal.
-
-That's it. Claude acts as your onboarding agent — it clones the repo, walks you through connecting BitGet, sets your trading preferences, connects TradingView, optionally builds a strategy from a YouTube channel, deploys to Railway, and runs the bot for the first time. Every step is interactive. It pauses when it needs something from you and handles everything else automatically.
-
----
-
-## What's Happening Under the Hood
-
-For anyone who wants to understand the steps manually, or troubleshoot a specific part:
-
-### Prerequisites
-
-- **TradingView MCP** must already be set up — built in the [first video](https://youtu.be/vIX6ztULs4U)
-- **Claude Code** installed and running
-- **A BitGet account** — [sign up here]([https://partner.bitget.com/bg/LewisJackson](https://bonus.bitget.com/LewisJackson)) for a $1,000 bonus on your first deposit
-- **Node.js 18+** — check with `node --version`
-
----
-
-### Clone the repo
-
-**Mac / Linux:**
 ```bash
-git clone https://github.com/jackson-video-resources/claude-tradingview-mcp-trading
-cd claude-tradingview-mcp-trading
+pip install -r requirements.txt
 ```
 
-**Windows:**
-```powershell
-git clone https://github.com/jackson-video-resources/claude-tradingview-mcp-trading
-cd claude-tradingview-mcp-trading
-```
-
----
-
-### Add your BitGet API credentials
-
-**Mac / Linux:**
-```bash
-cp .env.example .env
-```
-
-**Windows:**
-```powershell
-Copy-Item .env.example .env
-```
-
-Open `.env` and fill in:
+### 2. Configure `.env`
 
 ```
-BITGET_API_KEY=your_api_key_here
-BITGET_SECRET_KEY=your_secret_key_here
-BITGET_PASSPHRASE=your_passphrase_here
+BITGET_API_KEY=your_key
+BITGET_SECRET_KEY=your_secret
+BITGET_PASSPHRASE=your_passphrase
+BITGET_BASE_URL=https://api.bitget.com
+TRADE_MODE=spot
+
+STRATEGIES=supertrend_rsi,bb_rsi_scalp
+SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT
+
 PORTFOLIO_VALUE_USD=1000
-MAX_TRADE_SIZE_USD=100
-MAX_TRADES_PER_DAY=3
+MAX_TRADE_SIZE_USD=20
+MAX_TRADES_PER_DAY=50
+PAPER_TRADING=true
+LOOP_INTERVAL_SECONDS=300
+LOG_DIR=data
 ```
 
-**Getting your API key:**
-
-Step-by-step guides for all supported exchanges:
-
-| Exchange | Guide |
-|----------|-------|
-| BitGet *(used in the video)* | [docs/exchanges/bitget.md](docs/exchanges/bitget.md) |
-| Binance | [docs/exchanges/binance.md](docs/exchanges/binance.md) |
-| Bybit | [docs/exchanges/bybit.md](docs/exchanges/bybit.md) |
-| OKX | [docs/exchanges/okx.md](docs/exchanges/okx.md) |
-| Coinbase Advanced | [docs/exchanges/coinbase.md](docs/exchanges/coinbase.md) |
-| Kraken | [docs/exchanges/kraken.md](docs/exchanges/kraken.md) |
-| KuCoin | [docs/exchanges/kucoin.md](docs/exchanges/kucoin.md) |
-| Gate.io | [docs/exchanges/gateio.md](docs/exchanges/gateio.md) |
-| MEXC | [docs/exchanges/mexc.md](docs/exchanges/mexc.md) |
-| Bitfinex | [docs/exchanges/bitfinex.md](docs/exchanges/bitfinex.md) |
-
-Two rules that apply to every exchange — **withdrawals OFF, IP whitelist ON**.
-
----
-
-### Launch TradingView and connect the MCP
-
-**Mac:**
-```bash
-tv_launch
-tv_health_check
-```
-
-**Windows:** See [docs/setup-windows.md](docs/setup-windows.md)
-
-**Linux:** See [docs/setup-linux.md](docs/setup-linux.md)
-
-Verify with `tv_health_check` — should return `cdp_connected: true`.
-
----
-
-### Run the bot manually
+### 3. Log in to Claude CLI (one time only)
 
 ```bash
-node bot.js
+claude /login
 ```
 
----
-
-## Deploy to Railway (Run in the Cloud 24/7)
-
-The local setup runs when your laptop is open. Railway lets the bot check for setups around the clock — even while you sleep.
-
-> **Note:** Cloud mode pulls candle data directly from Binance's free market API instead of TradingView. No TradingView Desktop needed in the cloud. The strategy logic and safety check are identical.
-
-### 1. Deploy
+### 4. Run
 
 ```bash
-npm install -g @railway/cli
-railway login
-railway init
-railway up
+# Loop forever (Ctrl+C to stop)
+python main.py
+
+# Single test run
+python main.py --once
+
+# Test signal pipeline without placing a trade
+python test_signal.py
 ```
 
-### 2. Set your environment variables in Railway
-
-Go to your Railway project → Variables and add everything from `.env.example`:
-
-| Variable | Example |
-|----------|---------|
-| `BITGET_API_KEY` | your key |
-| `BITGET_SECRET_KEY` | your secret |
-| `BITGET_PASSPHRASE` | your passphrase |
-| `PORTFOLIO_VALUE_USD` | 1000 |
-| `MAX_TRADE_SIZE_USD` | 100 |
-| `MAX_TRADES_PER_DAY` | 3 |
-| `PAPER_TRADING` | true (set to false when ready) |
-| `SYMBOL` | BTCUSDT |
-| `TIMEFRAME` | 4H |
-
-### 3. Set a cron schedule
-
-In Railway → Settings → Cron Schedule, set how often the bot runs. Recommended:
-
-| Timeframe | Schedule | What it means |
-|-----------|----------|----------------|
-| 4H chart | `0 */4 * * *` | Every 4 hours |
-| 1D chart | `0 9 * * *` | Once a day at 9am UTC |
-| 1H chart | `0 * * * *` | Every hour |
-
-### 4. Start in paper trading mode
-
-`PAPER_TRADING=true` logs every decision but never places real orders. Watch a few days of paper trades, confirm the logic matches what you expect, then flip it to `false`.
-
----
-
-## Build Your Own Strategy (Optional)
-
-The example `rules.json` uses the van de Poppe + Tone Vays BTC strategy. To build one from any trader's public videos:
-
-1. Go to [Apify](https://apify.com?fpr=3ly3yd) and search the actor store for **YouTube Transcript Scraper** — takes about 30 seconds per channel
-2. Paste the output into `prompts/01-extract-strategy.md`
-3. Run that prompt in Claude Code — it generates a `rules.json` tailored to that trader's methodology
-
----
-
-## Files
-
-| File | What it does |
-|------|-------------|
-| `rules.json` | Your strategy — indicators, entry rules, risk rules |
-| `.env` | Your BitGet credentials (gitignored — never commits) |
-| `prompts/01-extract-strategy.md` | Build rules.json from trader transcripts |
-| `prompts/02-one-shot-trade.md` | **The one-shot prompt — paste this to trade** |
-| `safety-check-log.json` | Auto-generated log of every trade decision |
-| `trades.csv` | Tax-ready trade record — auto-written on every execution |
-| `docs/setup-windows.md` | Windows-specific MCP setup |
-| `docs/setup-linux.md` | Linux-specific MCP setup |
-
----
-
-## Tax Accounting
-
-Every trade the bot places is automatically written to `trades.csv` with the columns your accountant needs:
-
-| Column | Description |
-|--------|-------------|
-| Date | ISO date of the trade |
-| Time | UTC time |
-| Exchange | BitGet |
-| Symbol | e.g. BTCUSDT |
-| Side | Buy / Sell |
-| Quantity | Units traded |
-| Price | Price per unit at execution |
-| Total USD | Gross trade value |
-| Fee (est.) | Estimated exchange fee |
-| Net Amount | Total USD minus fee |
-| Order ID | Exchange reference |
-| Mode | Paper / Live |
-
-At tax time: open the file, hand it to your accountant, or import it directly into your accounting software. Nothing to reconstruct.
-
-For a quick summary of your trading activity, run:
+### 5. Open the dashboard
 
 ```bash
-node bot.js --tax-summary
+python dashboard/app.py
 ```
 
-This prints total trades, volume, and fees paid.
+Then open **http://localhost:5050** in your browser.
 
 ---
 
-## Safety
+## Signal Flow
 
-The safety check conditions are not fixed — they come directly from your `rules.json`. If you build a strategy from a YouTube trader's transcripts using the Apify prompt, your safety check will reflect that trader's entry logic. If you use the example strategy, it reflects those conditions. They're yours, not a generic filter.
-
-Every condition in your `entry_rules` must pass before a trade goes through. One fails — nothing happens. The bot tells you exactly which condition failed and the actual value it saw.
-
-Additional guardrails that apply regardless of strategy:
-- Maximum trade size capped at `MAX_TRADE_SIZE_USD` in `.env`
-- Maximum trades per day capped at `MAX_TRADES_PER_DAY` in `.env`
-- Position sizing calculated from your portfolio value — max 1% risk per trade
-- Every decision logged to `safety-check-log.json` with exact indicator values
-- Every executed trade recorded in `trades.csv` for accounting
-
-**This is not financial advice.** Build your strategy properly. Run the backtest. Paper trade before going live. Never put in more than you can afford to lose.
+```
+Every 5 minutes:
+  ├── position_monitor.check_all()
+  │     └── SL or TP hit?
+  │           ├── close position
+  │           ├── write to trades_SYMBOL.csv
+  │           ├── write journal entry (entry/exit data)
+  │           └── Claude analyzes trade → appends analysis to journal
+  │
+  └── for each symbol × strategy:
+        ├── fetch candles (at strategy's timeframe)
+        ├── run strategy indicators
+        ├── all conditions pass? → SIGNAL
+        │     ├── place_order.py runs immediately
+        │     │     └── price staleness check (reject if moved > 0.5%)
+        │     └── Claude takes screenshot → saved to data/screenshots/
+        └── conditions fail? → BLOCKED → logged to CSV (zero Claude tokens)
+```
 
 ---
 
-## Resources
+## Order Execution (Live Mode)
 
-- [First video — Connect Claude to TradingView](https://youtu.be/vIX6ztULs4U)
-- [TradingView MCP repo (first video)](https://github.com/jackson-video-resources/tradingview-mcp-jackson)
-- [Apify](https://apify.com?fpr=3ly3yd) — search actor store for "YouTube Transcript Scraper"
-- [BitGet — $1,000 bonus on first deposit]([https://partner.bitget.com/bg/LewisJackson](https://bonus.bitget.com/LewisJackson))
+When `PAPER_TRADING=false`, every trade places three things on BitGet:
+
+1. **Entry** — market order (fills immediately)
+2. **OCO** — One Cancels the Other order containing both:
+   - Take profit limit order at TP price
+   - Stop loss stop-market order at SL price
+
+When one of the OCO legs fills, BitGet automatically cancels the other. The exchange manages SL/TP 24/7 — the bot doesn't need to be running.
+
+---
+
+## Trade Journal
+
+Every closed position generates a markdown file:
+
+```
+data/journal/2026-04-16_1430_XRPUSDT_LONG_WIN.md
+```
+
+The file contains:
+- Entry/exit prices, P&L, duration, conditions at entry
+- **Claude Analysis** section appended automatically:
+  - What happened and why
+  - What the indicator values say
+  - Specific improvement suggestions for the strategy
+  - Overall verdict
+
+---
+
+## Dashboard
+
+Run `python dashboard/app.py` and open **http://localhost:5050**.
+
+Shows:
+- Summary cards: total trades, win rate, total P&L, best/worst trade
+- Breakdown by strategy and by symbol
+- Full trade log with filters (symbol, strategy, outcome)
+- Open positions
+- Journal file list with one-click view
+
+Reads CSV files and `positions.json` directly — no database, no sync needed.
+
+---
+
+## Adding a New Strategy
+
+1. Create `strategies/my_strategy.py` — subclass `BaseStrategy`
+2. Implement `name`, `timeframe`, and `analyze()` — return a `Signal`
+3. Set SL/TP inside the strategy (not in `.env`)
+4. Register in `main.py` `_build_strategies()` dict
+5. Add to `STRATEGIES=...,my_strategy` in `.env`
+
+No other file needs to change.
+
+---
+
+## Running Multiple Strategies
+
+```
+# Run all three simultaneously
+STRATEGIES=supertrend_rsi,bb_rsi_scalp,van_de_poppe
+
+# Scalper only
+STRATEGIES=bb_rsi_scalp
+
+# Single strategy (old format still works)
+STRATEGY=supertrend_rsi
+```
+
+Loop interval should match the shortest active timeframe:
+- BB Scalp only → `LOOP_INTERVAL_SECONDS=300` (5 min)
+- Supertrend only → `LOOP_INTERVAL_SECONDS=3600` (1 hour)
+- Both running → `LOOP_INTERVAL_SECONDS=300`
+
+---
+
+## Going Live
+
+1. Set `PAPER_TRADING=false` in `.env`
+2. Ensure BitGet API key has **spot trading** enabled
+3. Ensure **withdrawals are OFF** on the API key
+4. Run `python main.py --once` first to verify one clean cycle
+
+---
+
+**Not financial advice. Paper trade before going live. Never risk more than you can afford to lose.**

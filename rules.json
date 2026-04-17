@@ -1,50 +1,126 @@
 {
-  "watchlist": ["BTCUSDT"],
-  "default_timeframe": "1m",
+  "watchlist": ["BTCUSDT", "XRPUSDT", "ETHUSDT", "SOLUSDT"],
+  "default_timeframe": "1D",
+
+  "active_strategy": "van_de_poppe",
 
   "strategy": {
-    "name": "VWAP + RSI(3) + EMA(8) Scalping Strategy",
-    "sources": ["Lewis Jackson"],
-    "description": "Three indicators, each doing a different job. EMA(8) for trend direction, VWAP for session bias, RSI(3) for entry timing. All three must align before a trade fires."
-  },
+    "id": "van_de_poppe",
+    "name": "Michaël van de Poppe — Golden Pocket + Market Structure",
+    "source": "Michaël van de Poppe (@CryptoMichNL) — MN Trading Academy, Medium, YouTube",
+    "description": "Top-down multi-timeframe strategy. Set bias on Daily/4H using EMA 21/50/200 and market structure (HH/HL vs LH/LL). Enter at Fibonacci Golden Pocket (0.618–0.65) confluence with EMA. RSI confirms momentum.",
 
-  "indicators": {
-    "ema_8": "Trend direction. Price above EMA(8) = bullish momentum. Below = bearish.",
-    "vwap": "Session bias. Price above VWAP = buyers in control. Below = sellers. Resets at midnight UTC.",
-    "rsi_3": "Entry timing. RSI on 3 candles only — extremely sensitive. Below 30 in an uptrend = snap-back setup. Above 70 in a downtrend = reversal likely."
-  },
+    "indicators": {
+      "ema_21": "Short-term dynamic support/resistance. Price bouncing off EMA 21 in uptrend = continuation.",
+      "ema_50": "Medium-term trend filter. Close above = bullish. Close below = bearish.",
+      "ema_200": "Macro trend filter. Only take longs above EMA 200. Only take shorts below EMA 200.",
+      "rsi_14": "Momentum filter. Long entries: RSI between 40–65. Short entries: RSI between 35–60. Avoid extremes.",
+      "fibonacci": "Golden Pocket zone = 0.618 to 0.65 retracement of last swing. Primary entry zone."
+    },
 
-  "bias_criteria": {
-    "bullish": ["Price is above VWAP", "Price is above EMA(8)"],
-    "bearish": ["Price is below VWAP", "Price is below EMA(8)"]
-  },
+    "bias_criteria": {
+      "bullish": [
+        "Price is above EMA 21 AND EMA 50",
+        "RSI is above 50",
+        "Market structure shows Higher Highs and Higher Lows on the setup timeframe"
+      ],
+      "bearish": [
+        "Price is below EMA 21 AND EMA 50",
+        "RSI is below 50",
+        "Market structure shows Lower Highs and Lower Lows"
+      ],
+      "neutral": [
+        "Price is between EMA 21 and EMA 50 — no trade",
+        "RSI is exactly 50 — no trade",
+        "Structure is unclear — no trade"
+      ]
+    },
 
-  "entry_rules": {
-    "long": [
-      "Price is above VWAP — buyers in control for the session",
-      "Price is above EMA(8) — uptrend confirmed",
-      "RSI(3) has dropped below 30 — short-term pullback in an uptrend, snap-back likely"
+    "entry_rules": {
+      "long": [
+        "Daily bias is bullish: price above EMA 21 and EMA 50, RSI > 50",
+        "Price is above EMA 200 (macro bull market confirmed)",
+        "Price has pulled back toward EMA 21 or EMA 50 (within 0.6% of either)",
+        "RSI is between 40 and 65 — not overbought at entry",
+        "Enter on current candle close"
+      ],
+      "short": [
+        "Daily bias is bearish: price below EMA 21 and EMA 50, RSI < 50",
+        "Price is below EMA 200 (macro bear market confirmed)",
+        "Price has rallied back toward EMA 21 or EMA 50 (within 0.6% of either)",
+        "RSI is between 35 and 60 — not oversold at entry",
+        "Enter on current candle close"
+      ]
+    },
+
+    "exit_rules": {
+      "stop_loss": "1.5% below entry for longs / 1.5% above entry for shorts",
+      "take_profit_1": "Previous swing high (long) or swing low (short) — close 50% of position",
+      "take_profit_2": "Fibonacci extension 1.272 from entry — close 30% of position",
+      "take_profit_3": "Fibonacci extension 1.618 — close remaining 20%",
+      "invalidation": "If price closes back below EMA 21 and EMA 50 within 2 candles after entry — exit immediately"
+    },
+
+    "risk_rules": [
+      "Risk maximum 2% of portfolio per trade ($20 on a $1,000 portfolio)",
+      "Maximum trade size capped by MAX_TRADE_SIZE_USD in .env",
+      "Maximum trades per day capped by MAX_TRADES_PER_DAY in .env",
+      "Do not trade if price is more than 3% away from the nearest EMA — overextended",
+      "Do not trade on weekends — reduce position size on Saturdays/Sundays",
+      "Never trade against the higher timeframe bias",
+      "Confluence required: at least EMA touch + RSI in range must both be true"
     ],
-    "short": [
-      "Price is below VWAP — sellers in control",
-      "Price is below EMA(8) — downtrend confirmed",
-      "RSI(3) has spiked above 70 — overbought in a downtrend, reversal likely"
-    ]
+
+    "safety_check_summary": "The bot will only trade when ALL of the following are true: (1) Price is above/below both EMA 21 and EMA 50 matching the direction, (2) Price is above/below EMA 200 matching the direction, (3) Price is within 0.6% of EMA 21 or EMA 50 — the entry confluence zone, (4) RSI 14 is between 40–65 for longs or 35–60 for shorts. If any single condition fails, no trade fires."
   },
 
-  "exit_rules": [
-    "Exit when RSI(3) crosses back above 50 (for longs) or below 50 (for shorts)",
-    "Hard stop: 0.3% below entry for longs, 0.3% above entry for shorts",
-    "Take profit at next VWAP touch or EMA(8) cross"
+  "other_strategies": [
+    {
+      "id": "ema_crossover",
+      "name": "9/21 EMA Crossover with RSI Filter",
+      "status": "reference only — not active",
+      "timeframes": { "primary": "15m or 1H", "confirmation": "4H" },
+      "entry_rules": {
+        "long": ["EMA 9 crosses above EMA 21", "RSI between 50 and 70", "Price closes above both EMAs", "Volume > previous 3 candles"],
+        "short": ["EMA 9 crosses below EMA 21", "RSI between 30 and 50", "Price closes below both EMAs", "Volume confirmation"]
+      }
+    },
+    {
+      "id": "vwap_reclaim",
+      "name": "VWAP Reclaim / Rejection",
+      "status": "reference only — not active",
+      "timeframes": { "primary": "5m or 15m" },
+      "entry_rules": {
+        "long": ["Price below VWAP for 3–5 candles", "Candle closes above VWAP (reclaim)", "Above-average volume on reclaim candle", "EMA 9 turning upward"],
+        "short": ["Price rallies to VWAP from below but fails to close above", "Candle closes back below VWAP", "Elevated volume on rejection candle"]
+      }
+    },
+    {
+      "id": "rsi_divergence_bb_squeeze",
+      "name": "RSI Divergence + Bollinger Band Squeeze",
+      "status": "reference only — not active",
+      "timeframes": { "primary": "1H or 4H" },
+      "entry_rules": {
+        "long": ["Price makes lower low, RSI makes higher low (bullish divergence)", "Bollinger Bands squeezing (width contracting)", "Price near lower Bollinger Band", "MACD histogram decreasing negative bars"],
+        "short": ["Price makes higher high, RSI makes lower high (bearish divergence)", "BB squeezing", "Price near upper BB", "MACD histogram decreasing positive bars"]
+      }
+    },
+    {
+      "id": "opening_range_breakout",
+      "name": "Opening Range Breakout (ORB)",
+      "status": "reference only — not active",
+      "timeframes": { "primary": "15m", "session": "First 30 minutes of UTC 00:00 or 08:00 opens" },
+      "entry_rules": {
+        "long": ["Price closes above OR High on 15m", "VWAP below current price", "EMA 9 above EMA 20", "Volume 1.5x the 20-period average"],
+        "short": ["Price closes below OR Low", "VWAP above current price", "EMA 9 below EMA 20", "Volume 1.5x confirmation"]
+      }
+    }
   ],
 
-  "risk_rules": [
-    "Risk maximum 1% of portfolio per trade",
-    "Maximum trade size capped by MAX_TRADE_SIZE_USD in .env",
-    "Maximum trades per day capped by MAX_TRADES_PER_DAY in .env",
-    "Do not trade if price is more than 1.5% away from VWAP — overextended",
-    "Paper trade first — validate this strategy on your specific asset before going live"
-  ],
-
-  "notes": "Scalping strategy — designed for 1m to 5m timeframes. RSI(3) is intentionally fast and sensitive. Do not apply to higher timeframes."
+  "global_risk_rules": [
+    "Risk no more than 2% of capital per trade",
+    "Best entries occur when 2+ conditions align simultaneously",
+    "BTC trades 24/7 — reduce size on weekends",
+    "Extreme funding rates above 0.1% on perpetuals — avoid entering in that direction"
+  ]
 }

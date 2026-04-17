@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Journal</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Layout ── */
+    .header {
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3148;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header h1 { font-size: 1.2rem; font-weight: 600; color: #fff; }
+    .header .meta { font-size: 12px; color: #6b7280; }
+
+    .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem 2rem; }
+
+    section { margin-bottom: 2rem; }
+    h2 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      margin-bottom: 0.75rem;
+    }
+
+    /* ── Summary cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 0.75rem;
+    }
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .card .label { font-size: 11px; color: #6b7280; margin-bottom: 0.25rem; }
+    .card .value { font-size: 1.4rem; font-weight: 700; color: #fff; }
+    .card .value.green  { color: #34d399; }
+    .card .value.red    { color: #f87171; }
+    .card .value.yellow { color: #fbbf24; }
+
+    /* ── Breakdown grids ── */
+    .breakdown-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    .breakdown-table {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .breakdown-table table { width: 100%; border-collapse: collapse; }
+    .breakdown-table th {
+      background: #12151f;
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+      font-size: 11px;
+      color: #6b7280;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .breakdown-table td {
+      padding: 0.5rem 0.75rem;
+      border-top: 1px solid #2d3148;
+      font-size: 13px;
+    }
+
+    /* ── Open positions ── */
+    .positions-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 0.75rem;
+    }
+    .position-card {
+      background: #1a1d27;
+      border: 1px solid #2563eb;
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .position-card .pos-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .position-card .pos-symbol { font-weight: 700; font-size: 1rem; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge.long  { background: #064e3b; color: #34d399; }
+    .badge.paper { background: #1e3a5f; color: #60a5fa; }
+    .badge.live  { background: #450a0a; color: #f87171; }
+    .pos-row { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; margin-top: 4px; }
+    .pos-row span:last-child { color: #e2e8f0; }
+    .empty-note { color: #4b5563; font-style: italic; font-size: 13px; }
+
+    /* ── Filters ── */
+    .filters {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .filters select, .filters input {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      color: #e2e8f0;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .filters button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .filters button:hover { background: #1d4ed8; }
+    .filters a.reset {
+      color: #6b7280;
+      text-decoration: none;
+      font-size: 12px;
+    }
+    .filters a.reset:hover { color: #e2e8f0; }
+
+    /* ── Trades table ── */
+    .table-wrap {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      overflow: auto;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      background: #12151f;
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      font-size: 11px;
+      color: #6b7280;
+      font-weight: 600;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    tbody tr { border-top: 1px solid #1e2235; transition: background 0.1s; }
+    tbody tr:hover { background: #1e2235; }
+    tbody td { padding: 0.55rem 0.75rem; white-space: nowrap; }
+
+    .win  { color: #34d399; }
+    .loss { color: #f87171; }
+    .blocked { color: #4b5563; }
+
+    .outcome-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .outcome-pill.win     { background: #064e3b; color: #34d399; }
+    .outcome-pill.loss    { background: #450a0a; color: #f87171; }
+    .outcome-pill.blocked { background: #1f2937; color: #6b7280; }
+
+    /* ── Journal ── */
+    .journal-list { display: flex; flex-direction: column; gap: 0.5rem; }
+    .journal-item {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 6px;
+      padding: 0.6rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .journal-item .fname { font-size: 13px; color: #e2e8f0; }
+    .journal-item a {
+      color: #60a5fa;
+      text-decoration: none;
+      font-size: 12px;
+    }
+    .journal-item a:hover { text-decoration: underline; }
+
+    .tab-nav {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid #2d3148;
+      padding-bottom: 0;
+    }
+    .tab-btn {
+      padding: 0.5rem 1rem;
+      background: none;
+      border: none;
+      color: #6b7280;
+      cursor: pointer;
+      font-size: 14px;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tab-btn.active { color: #e2e8f0; border-bottom-color: #2563eb; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📊 Trading Journal</h1>
+  <span class="meta">Last updated: {{ now }}</span>
+</div>
+
+<div class="container">
+
+  <!-- ── Summary cards ── -->
+  <section>
+    <h2>Overview</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="label">Closed Trades</div>
+        <div class="value">{{ stats.total_closed }}</div>
+      </div>
+      <div class="card">
+        <div class="label">Win Rate</div>
+        <div class="value {% if stats.win_rate >= 50 %}green{% else %}red{% endif %}">
+          {{ stats.win_rate }}%
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Total P&L</div>
+        <div class="value {% if stats.total_pnl >= 0 %}green{% else %}red{% endif %}">
+          ${{ "%.4f"|format(stats.total_pnl) }}
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Wins / Losses</div>
+        <div class="value"><span class="green">{{ stats.wins }}</span> / <span class="red">{{ stats.losses }}</span></div>
+      </div>
+      <div class="card">
+        <div class="label">Avg Win</div>
+        <div class="value green">${{ "%.4f"|format(stats.avg_win) }}</div>
+      </div>
+      <div class="card">
+        <div class="label">Avg Loss</div>
+        <div class="value red">${{ "%.4f"|format(stats.avg_loss) }}</div>
+      </div>
+      <div class="card">
+        <div class="label">Best Trade</div>
+        <div class="value green">${{ "%.4f"|format(stats.best_trade) }}</div>
+      </div>
+      <div class="card">
+        <div class="label">Worst Trade</div>
+        <div class="value red">${{ "%.4f"|format(stats.worst_trade) }}</div>
+      </div>
+      <div class="card">
+        <div class="label">Blocked Signals</div>
+        <div class="value yellow">{{ stats.total_blocked }}</div>
+      </div>
+      <div class="card">
+        <div class="label">Open Positions</div>
+        <div class="value {% if positions %}yellow{% endif %}">{{ positions|length }}</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Breakdown ── -->
+  <section>
+    <h2>Breakdown</h2>
+    <div class="breakdown-grid">
+
+      <div class="breakdown-table">
+        <table>
+          <thead><tr><th>Strategy</th><th>Trades</th><th>Win Rate</th><th>P&L</th></tr></thead>
+          <tbody>
+          {% for name, s in stats.by_strategy.items() %}
+          <tr>
+            <td>{{ name }}</td>
+            <td>{{ s.trades }}</td>
+            <td class="{% if s.win_rate >= 50 %}win{% else %}loss{% endif %}">{{ s.win_rate }}%</td>
+            <td class="{% if s.pnl >= 0 %}win{% else %}loss{% endif %}">${{ "%.4f"|format(s.pnl) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="blocked" style="padding:1rem">No data yet</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="breakdown-table">
+        <table>
+          <thead><tr><th>Symbol</th><th>Trades</th><th>Win Rate</th><th>P&L</th></tr></thead>
+          <tbody>
+          {% for sym, s in stats.by_symbol.items() %}
+          <tr>
+            <td>{{ sym }}</td>
+            <td>{{ s.trades }}</td>
+            <td class="{% if s.win_rate >= 50 %}win{% else %}loss{% endif %}">{{ s.win_rate }}%</td>
+            <td class="{% if s.pnl >= 0 %}win{% else %}loss{% endif %}">${{ "%.4f"|format(s.pnl) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="blocked" style="padding:1rem">No data yet</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── Tabs: Trades / Open positions / Journal ── -->
+  <div class="tab-nav">
+    <button class="tab-btn active" onclick="switchTab('trades', this)">Trade Log</button>
+    <button class="tab-btn" onclick="switchTab('positions', this)">Open Positions ({{ positions|length }})</button>
+    <button class="tab-btn" onclick="switchTab('journal', this)">Journal ({{ journal|length }})</button>
+    <button class="tab-btn" onclick="switchTab('reviews', this)">Strategy Reviews ({{ reviews|length }})</button>
+  </div>
+
+  <!-- Trade log tab -->
+  <div id="tab-trades" class="tab-content active">
+    <div class="filters">
+      <form method="get" style="display:contents">
+        <select name="symbol">
+          <option value="ALL" {% if f_symbol == 'ALL' %}selected{% endif %}>All Symbols</option>
+          {% for s in all_symbols %}
+          <option value="{{ s }}" {% if f_symbol == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+        <select name="strategy">
+          <option value="ALL" {% if f_strategy == 'ALL' %}selected{% endif %}>All Strategies</option>
+          {% for s in all_strategies %}
+          <option value="{{ s }}" {% if f_strategy == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+        <select name="outcome">
+          <option value="ALL"     {% if f_outcome == 'ALL'     %}selected{% endif %}>All Outcomes</option>
+          <option value="WIN"     {% if f_outcome == 'WIN'     %}selected{% endif %}>Wins</option>
+          <option value="LOSS"    {% if f_outcome == 'LOSS'    %}selected{% endif %}>Losses</option>
+          <option value="BLOCKED" {% if f_outcome == 'BLOCKED' %}selected{% endif %}>Blocked</option>
+        </select>
+        <button type="submit">Filter</button>
+        <a href="/" class="reset">Reset</a>
+        <span style="color:#4b5563;margin-left:auto">{{ trades|length }} rows</span>
+      </form>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Time</th>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Strategy</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>Size USD</th>
+            <th>P&L USD</th>
+            <th>P&L %</th>
+            <th>Duration</th>
+            <th>Outcome</th>
+            <th>Mode</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for t in trades %}
+        {% set pnl = t['PnL USD']|float %}
+        {% set is_blocked = t['Close Reason'] == 'BLOCKED' %}
+        {% set is_win = pnl > 0 and not is_blocked %}
+        <tr>
+          <td class="{% if is_blocked %}blocked{% endif %}">{{ t['Date'] }}</td>
+          <td class="{% if is_blocked %}blocked{% endif %}">{{ t['Time (UTC)'] }}</td>
+          <td><strong>{{ t['Symbol'] }}</strong></td>
+          <td>{{ t['Side'] }}</td>
+          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">{{ t['Strategy'] or '—' }}</td>
+          <td>${{ t['Entry Price'] }}</td>
+          <td>{% if not is_blocked %}${{ t['Exit Price'] }}{% else %}—{% endif %}</td>
+          <td>${{ t['Total USD'] }}</td>
+          <td class="{% if is_blocked %}blocked{% elif is_win %}win{% else %}loss{% endif %}">
+            {% if not is_blocked %}${{ "%.4f"|format(pnl) }}{% else %}—{% endif %}
+          </td>
+          <td class="{% if is_blocked %}blocked{% elif is_win %}win{% else %}loss{% endif %}">
+            {% if not is_blocked %}{{ t['PnL %'] }}%{% else %}—{% endif %}
+          </td>
+          <td>{% if not is_blocked %}{{ t['Duration (h)'] }}h{% else %}—{% endif %}</td>
+          <td>
+            {% if is_blocked %}
+              <span class="outcome-pill blocked">BLOCKED</span>
+            {% elif is_win %}
+              <span class="outcome-pill win">WIN</span>
+            {% else %}
+              <span class="outcome-pill loss">LOSS</span>
+            {% endif %}
+          </td>
+          <td><span class="badge {% if t['Mode'] == 'PAPER' %}paper{% else %}live{% endif %}">{{ t['Mode'] }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="13" style="padding:2rem;text-align:center;color:#4b5563">No trades yet. Run the bot to generate data.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Open positions tab -->
+  <div id="tab-positions" class="tab-content">
+    {% if positions %}
+    <div class="positions-list">
+      {% for p in positions %}
+      <div class="position-card">
+        <div class="pos-header">
+          <span class="pos-symbol">{{ p.symbol }}</span>
+          <div style="display:flex;gap:6px">
+            <span class="badge long">{{ p.side }}</span>
+            <span class="badge {% if p.paper_trading %}paper{% else %}live{% endif %}">
+              {% if p.paper_trading %}PAPER{% else %}LIVE{% endif %}
+            </span>
+          </div>
+        </div>
+        <div class="pos-row"><span>Entry</span><span>${{ "%.2f"|format(p.entry_price) }}</span></div>
+        <div class="pos-row"><span>Stop Loss</span><span style="color:#f87171">${{ "%.2f"|format(p.stop_loss) }}</span></div>
+        <div class="pos-row"><span>Take Profit</span><span style="color:#34d399">${{ "%.2f"|format(p.take_profit) }}</span></div>
+        <div class="pos-row"><span>Size</span><span>${{ "%.2f"|format(p.size_usd) }}</span></div>
+        <div class="pos-row"><span>Qty</span><span>{{ p.quantity }}</span></div>
+        <div class="pos-row"><span>Strategy</span><span>{{ p.strategy_name or '—' }}</span></div>
+        <div class="pos-row"><span>Opened</span><span>{{ p.opened_at[:16].replace('T',' ') }} UTC</span></div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-note">No open positions right now.</p>
+    {% endif %}
+  </div>
+
+  <!-- Journal tab -->
+  <div id="tab-journal" class="tab-content">
+    {% if journal %}
+    <div class="journal-list">
+      {% for entry in journal %}
+      <div class="journal-item">
+        <span class="fname">{{ entry.filename }}</span>
+        <a href="/journal/{{ entry.filename }}" target="_blank">View →</a>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-note">No journal entries yet. They are created automatically when a trade closes.</p>
+    {% endif %}
+  </div>
+
+  <!-- Strategy Reviews tab -->
+  <div id="tab-reviews" class="tab-content">
+    {% if reviews %}
+    <p style="color:#6b7280;font-size:12px;margin-bottom:1rem">
+      Generated by running <code style="background:#1a1d27;padding:2px 6px;border-radius:4px">python review_strategies.py</code> — Claude analyzes all closed trades and suggests parameter changes.
+    </p>
+    <div class="journal-list">
+      {% for r in reviews %}
+      <div class="journal-item">
+        <span class="fname">{{ r.filename }}</span>
+        <a href="/review/{{ r.filename }}" target="_blank">View →</a>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-note">
+      No strategy reviews yet.<br><br>
+      Run <code style="background:#1a1d27;padding:2px 6px;border-radius:4px">python review_strategies.py</code>
+      once you have at least 3 closed trades to get Claude's analysis and improvement suggestions.
+    </p>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+  function switchTab(name, btn) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    btn.classList.add('active');
+  }
+</script>
+
+</body>
+</html>

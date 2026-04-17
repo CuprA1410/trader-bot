@@ -1,4 +1,10 @@
 .env
 *.log
-safety-check-log.json
 node_modules/
+__pycache__/
+*.pyc
+data/trades*.csv
+data/positions.json
+data/journal/
+data/screenshots/
+data/
