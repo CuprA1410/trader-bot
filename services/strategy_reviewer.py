@@ -5,10 +5,10 @@ concrete improvements to strategy parameters.
 Called manually via: python review_strategies.py
 Not wired into the bot loop — you run it when you want feedback.
 """
+from __future__ import annotations
 
 import csv
 import os
-import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -215,10 +215,10 @@ One paragraph: is this a tuning problem or a structural problem with the strateg
             )
             review_text = message.content[0].text
 
-            ts          = datetime.utcnow().strftime("%Y-%m-%d_%H%M")
+            ts          = datetime.now().strftime("%Y-%m-%d_%H%M")
             review_path = os.path.join(self._review_dir, f"{ts}_strategy_review.md")
             header = (
-                f"# Strategy Review — {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                f"# Strategy Review — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
                 f"_Based on {len(journal_entries)} closed trades ({wins}W / {losses}L)_\n\n"
                 f"---\n\n"
             )

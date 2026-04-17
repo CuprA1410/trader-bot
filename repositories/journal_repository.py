@@ -5,9 +5,10 @@ Each file is saved as: data/journal/YYYY-MM-DD_SYMBOL_SIDE_OUTCOME.md
 When /schedule is connected, a Claude agent will enrich these files with
 deeper analysis. For now, the bot fills in a structured template automatically.
 """
+from __future__ import annotations
 
 import os
-from datetime import datetime
+
 from models.trade import Trade, CloseReason
 from utils.logger import log
 

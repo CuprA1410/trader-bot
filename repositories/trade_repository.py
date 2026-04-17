@@ -11,12 +11,12 @@ Owns the CSV schema entirely. Nothing outside this class reads or writes
 these files directly.
 """
 
-import os
 import csv
+import os
 from datetime import datetime
+
 from models.trade import Trade
 from utils.logger import log
-
 
 CSV_COLUMNS = [
     "Date", "Time (UTC)", "Exchange", "Symbol", "Side", "Quantity",
@@ -45,7 +45,7 @@ class TradeRepository:
 
     def count_today(self) -> int:
         """Count trades executed today (UTC) — excludes BLOCKED rows."""
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         count = 0
         try:
             with open(self._path, "r", encoding="utf-8") as f:

@@ -19,15 +19,16 @@ Take profit: entry ± (|entry − SL| × 2.0)  →  2:1 R:R minimum
 
 Generates ~1–5 signals per day per symbol.
 """
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
-from ta.momentum import RSIIndicator
 
-from strategies.base_strategy import BaseStrategy
 from models.signal import Signal, Direction
+from strategies.base_strategy import BaseStrategy
 from utils.logger import log
 
 

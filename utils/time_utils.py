@@ -12,12 +12,12 @@ def utcnow() -> datetime:
 
 def utcnow_naive() -> datetime:
     """Return current UTC datetime without tzinfo (for JSON serialisation)."""
-    return datetime.utcnow()
+    return datetime.now()
 
 
 def today_utc() -> str:
     """Return today's date string in UTC — used for daily trade counting."""
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def format_duration(hours: float) -> str:

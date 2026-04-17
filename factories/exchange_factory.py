@@ -5,8 +5,10 @@ Centralises all ccxt setup logic. Services never import ccxt directly —
 they ask the factory for a connection. To add Bybit or OKX support,
 extend this factory without touching anything else.
 """
+from __future__ import annotations
 
 import ccxt
+
 from config import BitGetConfig
 from utils.logger import log
 

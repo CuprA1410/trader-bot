@@ -2,10 +2,11 @@
 Trade — a completed (closed) position with full P&L data.
 Written to trades.csv and triggers a journal entry.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from datetime import datetime
+from enum import Enum
 
 
 class CloseReason(str, Enum):

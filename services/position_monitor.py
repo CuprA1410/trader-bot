@@ -2,11 +2,11 @@
 PositionMonitor — checks all open positions on every bot run.
 
 Responsibilities:
-  - Fetch current price for each open position
-  - Detect if SL or TP has been breached
-  - Close the position on the exchange (or simulate in paper mode)
-  - Delegate persistence to TradeRepository, PositionRepository, JournalRepository
+  - For live futures: query BitGet directly to see if position is still open
+  - For paper / spot: compare current price against SL/TP levels
+  - Record closes, write journal, trigger Claude trade analysis
 """
+from __future__ import annotations
 
 import uuid
 from datetime import datetime
@@ -15,9 +15,8 @@ import ccxt
 
 from models.position import Position
 from models.trade import Trade, CloseReason
-from repositories.position_repository import PositionRepository
-from repositories.trade_repository import TradeRepository
 from repositories.journal_repository import JournalRepository
+from repositories.position_repository import PositionRepository
 from services.market_data_service import MarketDataService
 from services.trade_analyst import TradeAnalyst
 from utils.logger import log
@@ -36,13 +35,13 @@ class PositionMonitor:
         paper_trading: bool,
         trade_analyst: TradeAnalyst | None = None,
     ):
-        self._positions    = position_repo
-        self._trade_repos  = trade_repos
-        self._journal      = journal_repo
-        self._market       = market_data
-        self._exchange     = exchange
+        self._positions     = position_repo
+        self._trade_repos   = trade_repos
+        self._journal       = journal_repo
+        self._market        = market_data
+        self._exchange      = exchange
         self._paper_trading = paper_trading
-        self._analyst      = trade_analyst
+        self._analyst       = trade_analyst
 
     def check_all(self) -> list[Trade]:
         """
@@ -68,17 +67,139 @@ class PositionMonitor:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _evaluate(self, position: Position) -> Trade | None:
-        """Check a single position against current price. Return Trade if closed."""
+        """
+        Route evaluation based on mode:
+          - Live futures → ask BitGet if position is still open
+          - Paper / spot → compare Binance price against SL/TP
+        """
+        trade_mode = getattr(position, "trade_mode", "spot")
+        is_futures = trade_mode in ("futures", "swap")
+
+        if not self._paper_trading and is_futures:
+            return self._evaluate_live_futures(position)
+        else:
+            return self._evaluate_by_price(position)
+
+    # ── Live futures: query BitGet directly ──────────────────────────────────
+
+    def _evaluate_live_futures(self, position: Position) -> Trade | None:
+        """
+        Ask BitGet whether the position is still open.
+        If it's gone → the exchange closed it via native TP/SL → record it.
+        If it's still open → nothing to do this cycle.
+        Falls back to price-check if the API call fails.
+        """
+        trade_mode = getattr(position, "trade_mode", "futures")
+        ccxt_sym   = normalise_symbol(position.symbol, trade_mode)
+        ccxt_side  = "long" if position.side == "LONG" else "short"
+
+        try:
+            exchange_positions = self._exchange.fetch_positions([ccxt_sym])
+        except Exception as e:
+            log.warning(f"  fetch_positions failed for {position.symbol}: {e} — falling back to price check")
+            return self._evaluate_by_price(position)
+
+        # BitGet returns all positions; find ours by side and non-zero contracts
+        open_on_exchange = next(
+            (
+                p for p in exchange_positions
+                if p.get("side") == ccxt_side and float(p.get("contracts") or 0) > 0
+            ),
+            None,
+        )
+
+        if open_on_exchange:
+            # Position is still open — log current mark price and move on
+            mark_price = float(
+                open_on_exchange.get("markPrice")
+                or open_on_exchange.get("lastPrice")
+                or open_on_exchange.get("info", {}).get("markPrice")
+                or 0
+            )
+            if mark_price == 0:
+                mark_price = self._market.get_current_price(position.symbol)
+
+            unrealised_pnl = float(open_on_exchange.get("unrealizedPnl") or 0)
+            log.info(
+                f"  {position.symbol} {position.side} [FUTURES] still open on BitGet"
+                f" | Entry ${position.entry_price:,.2f}"
+                f" | Mark ${mark_price:,.2f}"
+                f" | SL ${position.stop_loss:,.2f} | TP ${position.take_profit:,.2f}"
+                f" | uPnL ${unrealised_pnl:+.4f}"
+            )
+            return None
+
+        # Position is gone from BitGet — it was closed by native TP/SL
+        log.info(f"  {position.symbol} {position.side} [FUTURES] — position closed on BitGet")
+
+        # Determine close reason and exit price.
+        # Use the preset TP/SL prices directly since that's where the native order filled.
+        current_price = self._market.get_current_price(position.symbol)
+        close_reason, exit_price = self._infer_close_from_exchange(position, current_price)
+
+        log.info(f"    Inferred: {close_reason.value} | exit ~${exit_price:,.4f}")
+        return self._record_close(position, exit_price, close_reason)
+
+    def _infer_close_from_exchange(
+        self, position: Position, current_price: float
+    ) -> tuple[CloseReason, float]:
+        """
+        When BitGet already closed the position natively, determine whether
+        it was TP or SL, and return the most accurate exit price we can get.
+
+        Strategy:
+          1. Try to fetch the most recent closed trade from BitGet for this symbol
+          2. Fall back to: whichever of TP/SL the current price is closest to
+        """
+        # Attempt 1: fetch recent trades from BitGet to get actual fill price
+        try:
+            trade_mode = getattr(position, "trade_mode", "futures")
+            ccxt_sym   = normalise_symbol(position.symbol, trade_mode)
+            # fetch last 5 trades, find the close (opposite side to position)
+            close_side = "sell" if position.side == "LONG" else "buy"
+            trades = self._exchange.fetch_my_trades(ccxt_sym, limit=10)
+            # Most recent close trade after position was opened
+            for t in reversed(trades):
+                if (t.get("side") == close_side
+                        and t.get("timestamp", 0) >= position.opened_at.timestamp() * 1000):
+                    fill = float(t.get("price") or t.get("average") or 0)
+                    if fill > 0:
+                        reason = (
+                            CloseReason.TAKE_PROFIT
+                            if (position.side == "LONG" and fill >= position.entry_price)
+                            or (position.side == "SHORT" and fill <= position.entry_price)
+                            else CloseReason.STOP_LOSS
+                        )
+                        log.info(f"    Actual fill from trade history: ${fill:,.4f}")
+                        return reason, fill
+        except Exception as e:
+            log.warning(f"    Could not fetch trade history: {e} — using price heuristic")
+
+        # Attempt 2: heuristic — whichever of TP/SL current price is closest to
+        sl_dist = abs(current_price - position.stop_loss)
+        tp_dist = abs(current_price - position.take_profit)
+
+        if tp_dist <= sl_dist:
+            return CloseReason.TAKE_PROFIT, position.take_profit
+        else:
+            return CloseReason.STOP_LOSS, position.stop_loss
+
+    # ── Paper / spot: compare price against SL/TP ────────────────────────────
+
+    def _evaluate_by_price(self, position: Position) -> Trade | None:
+        """Check a position by comparing current Binance price to SL/TP levels."""
         try:
             current_price = self._market.get_current_price(position.symbol)
         except Exception as e:
             log.warning(f"  Could not fetch price for {position.symbol}: {e}")
             return None
 
+        trade_mode = getattr(position, "trade_mode", "spot")
         log.info(
-            f"  {position.symbol} {position.side} [{position.trade_mode}] "
-            f"| Entry ${position.entry_price:,.2f} "
-            f"| Current ${current_price:,.2f} | SL ${position.stop_loss:,.2f} | TP ${position.take_profit:,.2f}"
+            f"  {position.symbol} {position.side} [{trade_mode.upper()}]"
+            f" | Entry ${position.entry_price:,.2f}"
+            f" | Current ${current_price:,.2f}"
+            f" | SL ${position.stop_loss:,.2f} | TP ${position.take_profit:,.2f}"
         )
 
         close_reason = self._detect_close_reason(position, current_price)
@@ -88,72 +209,52 @@ class PositionMonitor:
 
         log.info(f"    {close_reason.value} hit at ${current_price:,.2f}")
 
-        exit_price = self._execute_close(position, current_price)
+        # For paper mode, simulate fill at SL/TP price (not current, which may have moved)
+        if self._paper_trading:
+            exit_price = position.take_profit if close_reason == CloseReason.TAKE_PROFIT else position.stop_loss
+            log.info(f"    PAPER — simulated fill at ${exit_price:,.2f}")
+        else:
+            exit_price = self._place_close_order(position, current_price)
+
+        return self._record_close(position, exit_price, close_reason)
+
+    # ── Shared close logic ────────────────────────────────────────────────────
+
+    def _record_close(
+        self, position: Position, exit_price: float, close_reason: CloseReason
+    ) -> Trade | None:
+        """Persist the closed trade, write journal, trigger analysis."""
         trade = self._build_trade(position, exit_price, close_reason)
 
-        # Persist — use the symbol-specific trade repo
         trade_repo = self._trade_repos.get(position.symbol)
         if trade_repo is None:
             log.error(f"    No TradeRepository for {position.symbol} — cannot save closed trade.")
             return None
+
         self._positions.close(position.id)
         trade_repo.save(trade)
         journal_path = self._journal.write(trade)
 
         outcome = "WIN" if trade.is_winner else "LOSS"
         log.info(
-            f"    {outcome} | P&L ${trade.pnl_usd:+.4f} ({trade.pnl_pct:+.2f}%) "
-            f"| Journal -> {journal_path}"
+            f"    {outcome} | P&L ${trade.pnl_usd:+.4f} ({trade.pnl_pct:+.2f}%)"
+            f" | Journal -> {journal_path}"
         )
 
-        # Ask Claude to analyze the closed trade and enrich the journal
         if self._analyst:
             self._analyst.analyze(trade, journal_path)
 
         return trade
 
-    @staticmethod
-    def _detect_close_reason(position: Position, price: float) -> CloseReason | None:
-        if position.side == "LONG":
-            if price <= position.stop_loss:
-                return CloseReason.STOP_LOSS
-            if price >= position.take_profit:
-                return CloseReason.TAKE_PROFIT
-        elif position.side == "SHORT":
-            if price >= position.stop_loss:
-                return CloseReason.STOP_LOSS
-            if price <= position.take_profit:
-                return CloseReason.TAKE_PROFIT
-        return None
-
-    def _execute_close(self, position: Position, current_price: float) -> float:
-        """
-        Close the position on the exchange.
-
-        Paper mode: simulate the fill price.
-        Live with bracket orders (futures native TP/SL): exchange already handled it.
-        Live without bracket orders (spot/margin or fallback): place a market close order.
-        """
-        if self._paper_trading:
-            log.info(f"    PAPER — simulated close at ${current_price:,.2f}")
-            return current_price
-
-        # Live futures: if bracket orders were placed, the exchange already closed when
-        # TP/SL triggered. Just return the price for record-keeping.
-        if position.sl_order_id or position.tp_order_id:
-            log.info(f"    LIVE — bracket order triggered at ~${current_price:,.2f} (exchange handled close)")
-            return current_price
-
-        # Live mode without bracket orders: place a market close order manually.
-        # Futures need reduceOnly=True; spot/margin use a plain market sell/buy.
+    def _place_close_order(self, position: Position, current_price: float) -> float:
+        """Place a market close order for spot/margin positions (futures use native TP/SL)."""
         try:
-            trade_mode  = getattr(position, "trade_mode", "spot")
-            is_futures  = trade_mode in ("futures", "swap")
-            close_side  = "sell" if position.side == "LONG" else "buy"
-            ccxt_sym    = normalise_symbol(position.symbol, trade_mode)
+            trade_mode = getattr(position, "trade_mode", "spot")
+            is_futures = trade_mode in ("futures", "swap")
+            close_side = "sell" if position.side == "LONG" else "buy"
+            ccxt_sym   = normalise_symbol(position.symbol, trade_mode)
 
             if is_futures:
-                # BitGet v2 one-way mode: need tradeSide="close" + reduceOnly to close
                 order = self._exchange.create_order(
                     symbol=ccxt_sym,
                     type="market",
@@ -179,6 +280,20 @@ class PositionMonitor:
             return current_price
 
     @staticmethod
+    def _detect_close_reason(position: Position, price: float) -> CloseReason | None:
+        if position.side == "LONG":
+            if price <= position.stop_loss:
+                return CloseReason.STOP_LOSS
+            if price >= position.take_profit:
+                return CloseReason.TAKE_PROFIT
+        elif position.side == "SHORT":
+            if price >= position.stop_loss:
+                return CloseReason.STOP_LOSS
+            if price <= position.take_profit:
+                return CloseReason.TAKE_PROFIT
+        return None
+
+    @staticmethod
     def _build_trade(position: Position, exit_price: float, reason: CloseReason) -> Trade:
         return Trade(
             id=str(uuid.uuid4()),
@@ -193,7 +308,7 @@ class PositionMonitor:
             close_reason=reason,
             paper_trading=position.paper_trading,
             opened_at=position.opened_at,
-            closed_at=datetime.utcnow(),
+            closed_at=datetime.now(),
             order_id=position.order_id,
             strategy_name=position.strategy_name,
             trade_mode=getattr(position, "trade_mode", "spot"),

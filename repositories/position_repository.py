@@ -4,9 +4,11 @@ PositionRepository — persists open positions to positions.json.
 Positions survive container restarts on Railway via the persistent volume.
 This is the source of truth for what the bot currently holds.
 """
+from __future__ import annotations
 
-import os
 import json
+import os
+
 from models.position import Position, PositionStatus
 from utils.logger import log
 

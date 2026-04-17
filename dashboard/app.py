@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify, send_file, abort
+from flask import Flask, render_template, request, jsonify
 
 # Allow imports from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -221,7 +221,7 @@ def index():
         f_symbol=f_symbol,
         f_strategy=f_strategy,
         f_outcome=f_outcome,
-        now=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        now=datetime.now().strftime("%Y-%m-%d %H:%M UTC"),
     )
 
 
@@ -343,6 +343,102 @@ def api_reviews_latest():
     if not reviews:
         return jsonify({"error": "no reviews yet"}), 404
     return jsonify(reviews[0])
+
+
+@app.route("/api/positions/<position_id>/close", methods=["POST"])
+def api_close_position(position_id):
+    """
+    POST /api/positions/<id>/close
+    Manually mark a position as CLOSED in positions.json.
+    Useful for removing ghost entries that no longer exist on the exchange.
+    """
+    path = os.path.join(DATA_DIR, "positions.json")
+    if not os.path.exists(path):
+        return jsonify({"error": "positions.json not found"}), 404
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            all_pos = json.load(f)
+        matched = False
+        for p in all_pos:
+            if p.get("id") == position_id:
+                p["status"] = "CLOSED"
+                matched = True
+                break
+        if not matched:
+            return jsonify({"error": f"position {position_id} not found"}), 404
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(all_pos, f, indent=2)
+        return jsonify({"ok": True, "closed": position_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/positions/sync", methods=["POST"])
+def api_sync_positions():
+    """
+    POST /api/positions/sync
+    Queries BitGet for each open position in positions.json.
+    Any position no longer open on the exchange is marked CLOSED (ghost entry removal).
+    Returns a summary of what was found and fixed.
+    """
+    try:
+        from factories.exchange_factory import ExchangeFactory
+        from utils.market import normalise_symbol
+        from config import load_config
+
+        config   = load_config()
+        cfg      = config.trading
+        exchange = ExchangeFactory.create_bitget(config.bitget, paper_trading=False, trade_mode=cfg.trade_mode)
+        exchange.load_markets()
+
+        path = os.path.join(DATA_DIR, "positions.json")
+        if not os.path.exists(path):
+            return jsonify({"error": "positions.json not found"}), 404
+
+        with open(path, "r", encoding="utf-8") as f:
+            all_pos = json.load(f)
+
+        open_pos = [p for p in all_pos if p.get("status") == "OPEN"]
+        results  = []
+
+        for p in open_pos:
+            symbol    = p.get("symbol", "")
+            side      = p.get("side", "LONG")
+            ccxt_sym  = normalise_symbol(symbol, cfg.trade_mode)
+            ccxt_side = "long" if side == "LONG" else "short"
+
+            try:
+                ex_positions = exchange.fetch_positions([ccxt_sym])
+                still_open   = any(
+                    ep.get("side") == ccxt_side and float(ep.get("contracts") or 0) > 0
+                    for ep in ex_positions
+                )
+            except Exception as e:
+                results.append({"id": p["id"], "symbol": symbol, "status": "error", "detail": str(e)})
+                continue
+
+            if still_open:
+                results.append({"id": p["id"], "symbol": symbol, "side": side, "status": "open"})
+            else:
+                # Ghost — mark as closed
+                for pos in all_pos:
+                    if pos.get("id") == p["id"]:
+                        pos["status"] = "CLOSED"
+                results.append({"id": p["id"], "symbol": symbol, "side": side, "status": "ghost_closed"})
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(all_pos, f, indent=2)
+
+        closed_count = sum(1 for r in results if r["status"] == "ghost_closed")
+        return jsonify({
+            "ok":      True,
+            "checked": len(open_pos),
+            "closed":  closed_count,
+            "details": results,
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

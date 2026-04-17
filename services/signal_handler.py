@@ -9,11 +9,11 @@ When a signal fires, this service:
 Visual confirmation was removed — Python already validated all conditions
 against real Binance data. TradingView is just a visual of the same numbers.
 """
+from __future__ import annotations
 
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 from models.signal import Signal
 from utils.logger import log

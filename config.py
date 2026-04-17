@@ -2,9 +2,11 @@
 Application configuration — loads all environment variables into typed dataclasses.
 Single source of truth for every configurable value in the bot.
 """
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+
 from dotenv import load_dotenv
 
 load_dotenv()

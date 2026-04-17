@@ -2,10 +2,11 @@
 Signal — the output of a strategy analysis.
 Carries everything needed to decide whether to place a trade.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from datetime import datetime
+from enum import Enum
 
 
 class Direction(str, Enum):
