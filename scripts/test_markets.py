@@ -118,6 +118,42 @@ def _place_order_subprocess(
     return json.loads(text[last_start:end])
 
 
+def _cancel_exchange_position(position: Position, config) -> None:
+    """
+    Cancel open TP/SL orders and close the real exchange position after the test.
+    For futures: sends a market close (reduceOnly). For spot: sells back the BTC.
+    """
+    import ccxt as _ccxt
+    from utils.market import normalise_symbol
+
+    trade_mode = getattr(position, "trade_mode", "spot")
+    is_futures = trade_mode in ("futures", "swap")
+
+    try:
+        exchange = ExchangeFactory.create_bitget(
+            config.bitget, paper_trading=False, trade_mode=trade_mode
+        )
+        exchange.load_markets()
+        ccxt_sym   = normalise_symbol(position.symbol, trade_mode)
+        close_side = "sell" if position.side == "LONG" else "buy"
+
+        if is_futures:
+            exchange.create_order(
+                symbol=ccxt_sym, type="market", side=close_side,
+                amount=position.quantity, price=None,
+                params={"tradeSide": "close", "reduceOnly": True},
+            )
+        else:
+            # Spot: sell back the base currency at market
+            exchange.create_order(
+                symbol=ccxt_sym, type="market", side="sell",
+                amount=position.quantity, price=None,
+            )
+        print(f"  Exchange position closed ({trade_mode})")
+    except Exception as e:
+        print(f"  Warning: could not close exchange position — {e}")
+
+
 def _force_close_position(
     position: Position,
     exit_price: float,
@@ -125,30 +161,29 @@ def _force_close_position(
     cfg,
 ) -> str:
     """
-    Directly call PositionMonitor internals to record a TP close.
+    Record a TEST close in local tracking (does NOT place a real order).
+    Uses CloseReason.TEST so the journal filename shows _TEST, not _WIN/_LOSS.
     Returns the journal file path.
     """
-    log_dir      = cfg.log_dir
+    log_dir       = cfg.log_dir
     position_repo = PositionRepository(log_dir)
     trade_repo    = TradeRepository(log_dir, position.symbol)
     journal_repo  = JournalRepository(log_dir)
 
-    # Build a minimal exchange instance (only needed for live closes, which we skip
-    # because paper_trading=True forces a simulated path in _execute_close)
-    binance      = ExchangeFactory.create_binance_readonly()
-    market_data  = MarketDataService(binance)
+    binance     = ExchangeFactory.create_binance_readonly()
+    market_data = MarketDataService(binance)
 
     monitor = PositionMonitor(
         position_repo=position_repo,
         trade_repos={position.symbol: trade_repo},
         journal_repo=journal_repo,
         market_data=market_data,
-        exchange=None,          # not used: position is paper or bracket-order handled
-        paper_trading=True,     # force paper path so no live close order is sent
+        exchange=None,
+        paper_trading=True,
         trade_analyst=None,
     )
 
-    trade = monitor._build_trade(position, exit_price, CloseReason.TAKE_PROFIT)
+    trade = monitor._build_trade(position, exit_price, CloseReason.TEST)
     position_repo.close(position.id)
     trade_repo.save(trade)
     journal_path = journal_repo.write(trade)
@@ -178,19 +213,12 @@ def run_test(
         sl = round(price * 1.005, 2)
         tp = round(price * 0.995, 2)
 
-    # Spot test uses a real demo order (live API call on BitGet demo).
-    # Futures tests use paper trading to avoid needing demo futures balance.
-    # The full pipeline (position save → monitor → journal) is still exercised.
-    # To test live futures orders: fund your BitGet demo futures account and
-    # change paper_trading to "false" for the futures cases.
-    is_spot = (trade_mode == "spot")
     env_override = {
         "TRADE_MODE":    trade_mode,
-        "PAPER_TRADING": "false" if is_spot else "true",
+        "PAPER_TRADING": "false",
         "BITGET_DEMO":   "true",
     }
-    mode_label = "LIVE demo" if is_spot else "PAPER"
-    print(f"  Mode: {mode_label}")
+    print(f"  Mode: LIVE demo")
 
     try:
         result = _place_order_subprocess(
@@ -230,7 +258,7 @@ def run_test(
         print(f"FAIL: expected trade_mode={trade_mode!r}, got {position.trade_mode!r}")
         return False
 
-    # Force a TP close via monitor internals
+    # Record a TEST close locally (marks position closed in our tracking)
     journal_path = _force_close_position(position, tp, config, cfg)
 
     if not os.path.exists(journal_path):
@@ -238,6 +266,11 @@ def run_test(
         return False
 
     print(f"  Journal written  | {journal_path}")
+
+    # Close the real exchange position so it doesn't sit open on BitGet demo
+    if not result.get("mode") == "PAPER":
+        _cancel_exchange_position(position, config)
+
     print(f"PASS: {label}")
     return True
 

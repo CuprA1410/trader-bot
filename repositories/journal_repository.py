@@ -45,6 +45,8 @@ class JournalRepository:
             return "LOSS"
         if trade.close_reason == CloseReason.BLOCKED:
             return "BLOCKED"
+        if trade.close_reason == CloseReason.TEST:
+            return "TEST"
         return "MANUAL"
 
     @staticmethod

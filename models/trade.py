@@ -13,6 +13,7 @@ class CloseReason(str, Enum):
     STOP_LOSS = "STOP_LOSS"
     MANUAL = "MANUAL"
     BLOCKED = "BLOCKED"       # Signal was generated but safety check failed
+    TEST = "TEST"             # Forced close during automated test — not a real outcome
 
 
 @dataclass
