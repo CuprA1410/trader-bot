@@ -144,14 +144,30 @@ def main():
             ccxt_sym  = normalise_symbol(args.symbol, trade_mode)
             ccxt_side = "buy" if args.side.upper() == "LONG" else "sell"
 
-            # Enforce exchange minimum lot size — adjust quantity (and trade_size) if needed
+            # Enforce exchange minimum lot size.
+            # If the minimum lot costs more than MAX_TRADE_SIZE_USD, reject the trade —
+            # the guardrail exists for a reason and should never be silently bypassed.
             min_qty = float(
                 exchange.markets.get(ccxt_sym, {})
                 .get("limits", {}).get("amount", {}).get("min") or 0
             )
             if min_qty and quantity < min_qty:
+                min_cost = round(min_qty * args.entry, 2)
+                if min_cost > cfg.max_trade_size_usd:
+                    result = {
+                        "ok": False,
+                        "reason": "MIN_LOT_EXCEEDS_MAX_SIZE",
+                        "message": (
+                            f"Exchange minimum lot for {args.symbol} is {min_qty} "
+                            f"(~${min_cost:.2f}) which exceeds MAX_TRADE_SIZE_USD="
+                            f"${cfg.max_trade_size_usd:.2f}. "
+                            f"Raise MAX_TRADE_SIZE_USD or reduce position on this symbol."
+                        ),
+                    }
+                    print(json.dumps(result))
+                    return
                 quantity   = min_qty
-                trade_size = round(quantity * args.entry, 4)
+                trade_size = round(min_cost, 4)
                 log.info(
                     f"  Qty below exchange minimum ({min_qty}) "
                     f"— adjusted to {quantity} (${trade_size:.2f})"
